@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { GeminiProvider } from '../src/lib/llm/GeminiProvider';
+import { AnthropicProvider } from '../src/lib/llm/AnthropicProvider';
 import { config } from 'dotenv';
 import * as path from 'path';
 
@@ -15,28 +16,31 @@ async function main() {
     }
 
     const pdfPath = args[0];
-    
+
     try {
         console.log(`Reading PDF from: ${pdfPath}`);
         const fileBuffer = readFileSync(pdfPath);
         const fileBase64 = fileBuffer.toString('base64');
         console.log(`Base64 conversion successful. (Length: ${fileBase64.length} chars)`);
-        
-        console.log("Initializing GeminiProvider...");
-        const provider = new GeminiProvider();
-        
-        console.log("Sending to Gemini API for processing... (this may take a moment)");
-        console.time("Gemini Response Time");
-        
+
+        // Swap providers here as needed.
+        // const provider = new GeminiProvider();
+        const provider = new AnthropicProvider();
+
+        console.log(`Initializing ${provider.name}Provider...`);
+        console.log(`Sending to ${provider.name} API for processing... (this may take a moment)`);
+        const timerLabel = `${provider.name} Response Time`;
+        console.time(timerLabel);
+
         const result = await provider.parseSyllabus(fileBase64, 'application/pdf');
-        
-        console.timeEnd("Gemini Response Time");
-        
-        console.log("\\n=== PARSING RESULT ===");
+
+        console.timeEnd(timerLabel);
+
+        console.log(`\n=== ${provider.name.toUpperCase()} PARSING RESULT ===`);
         console.log(JSON.stringify(result, null, 2));
 
     } catch (error: any) {
-        console.error("\\n!!! Error during execution !!!");
+        console.error("\n!!! Error during execution !!!");
         console.error(error.message || error);
     }
 }
