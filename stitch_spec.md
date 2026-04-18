@@ -341,18 +341,77 @@ Already covered in §4.3 step 3. Runs on every generation.
 
 ## 7. Tech Stack
 
+Four things. That's it.
+
 | Layer | Choice | Why |
 |---|---|---|
-| Frontend | Next.js 14 (App Router) + TypeScript | SSR-friendly, good DX |
-| UI | Tailwind + shadcn/ui | Fast, consistent |
-| Graph viz | react-force-graph-2d | Handles layout, tap detection, zoom |
-| Auth | Supabase Auth | Shortest path to roles |
-| DB | Postgres (Supabase) | Clean relational model fits everything here |
-| Backend | FastAPI | Anish's stack; handles LLM pipelines |
-| Realtime | Supabase Realtime | Push live transcript + quiz-publish events |
+| Frontend + Backend | Next.js 14 (App Router) + TypeScript | One app, one deploy. API routes handle all backend logic. |
+| Auth + DB + Realtime | Supabase | Auth, Postgres, and Realtime all in one. JS client handles queries directly — no ORM needed. |
 | Transcription | ElevenLabs Scribe (batch + streaming) | Per spec |
-| LLM | Claude Sonnet for extraction, generation, validation | Reliable structured JSON output |
-| Deploy | Vercel (frontend) + Railway/Fly (FastAPI) | Simple |
+| LLM | Anthropic SDK (Claude Sonnet) | Reliable structured JSON output |
+
+Styling: Tailwind + shadcn/ui. Graph viz: react-force-graph-2d. PDF parsing: `unpdf`. Everything else is a file in the Next.js app.
+
+### 7.1 Why Next.js full-stack
+
+- Already using Next.js for frontend — no context-switch, no CORS, no separate deploy
+- API routes live next to the frontend code that calls them (`app/api/quizzes/route.ts`)
+- Supabase JS client is fully typed; no separate ORM layer to learn
+- Vercel Pro gives 60s serverless timeout, enough for every LLM extraction in this app
+- Live transcription runs browser → ElevenLabs directly; Next.js just stores the final transcript chunks
+
+### 7.2 Project structure
+
+```
+/stitch
+  /app
+    /(auth)               login / signup pages
+    /professor            professor views
+    /student              student views
+    /api                  all backend logic
+      /courses
+        /[id]/syllabus/route.ts
+        /[id]/lectures/route.ts
+      /quizzes
+        /[id]/route.ts
+        /[id]/publish/route.ts
+      /quiz-attempts
+        /[id]/submit/route.ts
+  /lib
+    /supabase.ts          Supabase client
+    /anthropic.ts         Claude client + extraction prompts
+    /elevenlabs.ts        transcription helpers
+    /mastery.ts           mastery update logic
+  /components             shared UI
+  /types                  TS types for concepts, quizzes, etc.
+```
+
+One app, one repo, one `npm run dev`.
+
+### 7.3 Example: API route pattern
+
+```ts
+// app/api/courses/[id]/concepts/route.ts
+import { supabase } from "@/lib/supabase";
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  const body = await req.json();
+
+  const { data, error } = await supabase
+    .from("concepts")
+    .insert({ course_id: params.id, ...body })
+    .select()
+    .single();
+
+  if (error) return Response.json({ error }, { status: 400 });
+  return Response.json(data);
+}
+```
+
+That's the whole pattern. Every backend endpoint looks like this.
 
 ---
 
@@ -361,9 +420,11 @@ Already covered in §4.3 step 3. Runs on every generation.
 Phases are ordered to get end-to-end working fast, then deepen each layer.
 
 ### Phase 0 — Auth + data model (day 1)
-- Supabase project setup
-- Full schema migration
-- Next.js scaffold with auth
+- Create Supabase project
+- Run schema migration in Supabase SQL editor (all tables from §3)
+- Scaffold Next.js app with TypeScript + Tailwind
+- Install: `@supabase/supabase-js`, `@supabase/ssr`, `@anthropic-ai/sdk`
+- Wire up Supabase Auth with middleware
 - Role-based routing (`/professor/*`, `/student/*`)
 
 ### Phase 1 — Syllabus → concepts (day 2)
