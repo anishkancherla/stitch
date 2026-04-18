@@ -19,23 +19,6 @@ export class AnthropicProvider extends LLMProvider {
     fileBase64: string,
     mimeType: string = 'application/pdf',
   ): Promise<SyllabusExtractionResult> {
-    const prompt = `
-You are analyzing a course syllabus. Extract the single overarching topic for each week.
-
-Return JSON matching this schema exactly without any markdown wrappers:
-{
-  "concepts": [
-    { "week": 1, "concept": "..." }
-  ]
-}
-
-Rules:
-- Exactly ONE concept per week
-- The concept should be the week's headline topic (e.g., "Binary Search Trees", not sub-details)
-- Exclude tools, languages, policies, and administrative topics
-- There should be exactly as many entries as there are weeks in the syllabus
-`;
-
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: 1500,
@@ -43,7 +26,7 @@ Rules:
         {
           role: 'user',
           content: [
-            { type: 'text', text: prompt },
+            { type: 'text', text: this.syllabusPrompt },
             {
               type: 'document',
               source: {
@@ -54,6 +37,12 @@ Rules:
             },
           ],
         },
+        // Prefill the assistant turn so Claude continues raw JSON
+        // instead of wrapping with prose or ```json fences.
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: '{' }],
+        },
       ],
     } as any);
 
@@ -62,8 +51,13 @@ Rules:
       throw new Error('No text returned from Anthropic API');
     }
 
+    // The prefilled '{' is not echoed back in the response, so re-prepend it
+    // when the model continued from an opened object.
+    const candidate = text.trimStart().startsWith('{') ? text : `{${text}`;
+    const jsonString = this.extractJsonString(candidate);
+
     try {
-      const parsed: SyllabusExtractionResult = JSON.parse(text);
+      const parsed: SyllabusExtractionResult = JSON.parse(jsonString);
       return parsed;
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown JSON parse error';
