@@ -1,16 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
-import { Heatmap } from "@/components/Heatmap";
+import { Ribbon } from "@/components/Ribbon";
 import { createClient } from "@/lib/supabase/server";
 import { signOut } from "@/app/(auth)/actions";
 import { PublishButton } from "./PublishButton";
 import { DeleteButton } from "./DeleteButton";
-import {
-  buildCells,
-  type HeatmapConcept,
-  type HeatmapLecture,
-} from "@/lib/heatmap";
+import { RealtimeRibbonRefresher } from "@/components/RealtimeRibbonRefresher";
+import { UploadSyllabusForm } from "./UploadSyllabusForm";
+import { UploadLectureForm } from "./UploadLectureForm";
+import { buildGroups } from "@/lib/ribbon";
 
 type Params = { id: string };
 type Search = { metric?: string };
@@ -96,40 +95,42 @@ export default async function CourseDetail({
     }
   }
 
-  const concepts: HeatmapConcept[] = (conceptRows ?? []).map((c) => ({
+  const concepts = (conceptRows ?? []).map((c) => ({
     id: c.id,
     label: c.label,
   }));
-  const lectures: HeatmapLecture[] = (lectureRows ?? []).map((l, i) => ({
+  const lectures = (lectureRows ?? []).map((l) => ({
     id: l.id,
-    label: `L${i + 1}`,
     title: l.title,
+    orderKey: l.started_at ?? l.created_at ?? "",
   }));
-
-  const cells = buildCells(
-    concepts,
-    lectures,
-    (subconceptRows ?? []).map((s) => ({
-      id: s.id,
-      label: s.label,
-      concept_id: s.concept_id,
-      lecture_id: s.lecture_id,
-    })),
-    (sid) => {
-      const a = subAgg.get(sid);
-      if (!a) return null;
-      // For "struggling", invert so that high value = good (green).
-      return metric === "avg" ? a.mean : 1 - a.struggling;
-    }
-  );
 
   const formatValue =
     metric === "avg"
       ? (v: number) => v.toFixed(2)
       : (v: number) => `${Math.round((1 - v) * 100)}% struggling`;
 
+  const groups = buildGroups(
+    concepts,
+    (subconceptRows ?? []).map((s) => ({
+      id: s.id,
+      label: s.label,
+      concept_id: s.concept_id,
+      lecture_id: s.lecture_id,
+    })),
+    lectures,
+    (sid) => {
+      const a = subAgg.get(sid);
+      if (!a) return null;
+      // For "struggling", invert so that high value = good (green).
+      return metric === "avg" ? a.mean : 1 - a.struggling;
+    },
+    formatValue
+  );
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
+      <RealtimeRibbonRefresher scopeId={`prof-${course.id}`} />
       <TopBar
         right={
           <div className="flex items-center gap-2">
@@ -192,7 +193,7 @@ export default async function CourseDetail({
         <section className="mt-12">
           <div className="flex items-baseline justify-between gap-4">
             <h2 className="text-base font-medium text-foreground">
-              Class heatmap
+              Class ribbon
             </h2>
             <div className="flex items-center gap-1 rounded-full border border-border bg-zinc-50 p-0.5 text-xs">
               <Link
@@ -220,24 +221,28 @@ export default async function CourseDetail({
             </div>
           </div>
 
-          <div className="mt-3">
-            <Heatmap
-              concepts={concepts}
-              lectures={lectures}
-              cells={cells}
-              formatValue={formatValue}
-              emptyState={
-                <>
-                  <p className="text-sm text-muted">
-                    No concepts or lectures yet for this course.
-                  </p>
-                  <p className="mt-1 text-sm text-muted">
-                    Add some via the editor (coming next) or seed via SQL — the
-                    heatmap fills in immediately.
-                  </p>
-                </>
-              }
-            />
+          <div className="mt-3 flex flex-col gap-4">
+            {concepts.length === 0 ? (
+              <UploadSyllabusForm courseId={course.id} />
+            ) : (
+              <>
+                <UploadLectureForm
+                  courseId={course.id}
+                  concepts={concepts.map((c) => ({ id: c.id, label: c.label }))}
+                />
+                <Ribbon
+                  groups={groups}
+                  caption={
+                    metric === "avg" ? "Class average mastery" : "% of class struggling"
+                  }
+                  emptyState={
+                    <p className="text-sm text-muted">
+                      Concepts exist but no lectures have been uploaded yet.
+                    </p>
+                  }
+                />
+              </>
+            )}
           </div>
         </section>
       </main>
