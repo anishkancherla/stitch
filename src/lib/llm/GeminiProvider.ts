@@ -6,7 +6,7 @@ export class GeminiProvider extends LLMProvider {
   private model: string;
 
   constructor(model = 'gemini-2.5-flash') {
-    super();
+    super('Gemini');
     // Defaulting to process.env.GEMINI_API_KEY
     // Using string index on process.env to avoid potential typescript issues
     const apiKey = process.env['GEMINI_API_KEY'] || '';
