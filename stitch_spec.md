@@ -36,17 +36,17 @@ Everything else — matching, social features, live student flagging, cross-cour
 
 ## 2. Two-Tier Concept Hierarchy
 
-The key structural decision. The graph has two levels:
+The key structural decision. Mastery data has two levels:
 
-**Concepts** — top-level nodes extracted from the **syllabus**. Stable across the whole course. Example: "Dynamic Programming," "Graph Traversal."
+**Concepts** — top-level items extracted from the **syllabus**. Stable across the whole course. Example: "Dynamic Programming," "Graph Traversal."
 
-**Subconcepts** — fine-grained nodes extracted from **individual lectures**. Each subconcept has a parent concept. Example under "Dynamic Programming": "Memoization vs tabulation," "Overlapping subproblems," "Bottom-up construction."
+**Subconcepts** — fine-grained items extracted from **individual lectures**. Each subconcept has a parent concept. Example under "Dynamic Programming": "Memoization vs tabulation," "Overlapping subproblems," "Bottom-up construction."
 
 Why this matters:
 - Mastery is tracked at the **subconcept** level (that's where quiz questions live)
-- Concept-level mastery is **aggregated** (mean or weighted average of its subconcepts)
-- The graph view shows concepts as the primary structure; subconcepts expand on hover/click
-- Matching can work at either level (v0: concept-level for a cleaner signal)
+- Concept-level mastery is **aggregated** (mean of its subconcepts)
+- The UI renders this as a **heatmap grid**: concepts as rows, subconcepts as colored cells within each row
+- Matching compares two students' grids cell-by-cell
 
 ```
 Concept: "Dynamic Programming"
@@ -55,6 +55,103 @@ Concept: "Dynamic Programming"
   ├── Subconcept: "Knapsack variants"             (from Lecture 5)
   └── Subconcept: "Longest common subsequence"    (from Lecture 5)
 ```
+
+### 2.1 Heatmap UX (GitHub contribution style)
+
+Every view of mastery is a tight grid of colored cells, same visual language as the GitHub contribution graph.
+
+```
+              L1    L2    L3    L4    L5    L6    L7    L8
+Recursion     ■     ■     ▪                 ▪
+DP            .     .     .     ■     ▪     .     ▫
+Graphs        .     .     .     .     .     ■     ■     ■
+Greedy        .     .     .     .     .     .     .     ▫
+...
+
+Legend: ▫ weak  ▪ developing  ■ strong   . not covered
+```
+
+- **Rows** = concepts from the syllabus (~8–20 rows)
+- **Columns** = lectures, left-to-right in chronological order (time axis)
+- **Cells** = aggregate mastery on that concept from that lecture's subconcepts (mean of subconcepts under concept X covered in lecture Y)
+- **Color** = red (weak) → yellow (developing) → green (strong)
+- **Empty/grey** = that concept wasn't covered in that lecture
+- **Click any cell** → side panel expands showing the individual subconcepts for that (concept, lecture) pair, with their own colors and recent quiz performance
+
+The two-tier hierarchy (concepts → subconcepts) is handled by progressive disclosure rather than cramming both levels into the grid. The grid stays uniform and scannable; subconcept detail is one click away.
+
+Labels: lecture numbers or dates across the top, concept names on the left. Intensity legend in the bottom-right corner.
+
+### 2.2 Views that fall out of the same grid
+
+One component, four features:
+
+**Student personal heatmap** — their own mastery cells. Green = solid, red = needs work.
+
+**Student diff view** — after submitting a quiz, cells that changed briefly animate with the mastery delta shown in the tooltip.
+
+**Professor class heatmap** — same grid, cell color aggregates across all enrolled students. Two toggleable metrics:
+- **Average mastery** — mean across the class (shows overall health)
+- **% struggling** — % of students below 0.5 mastery (more actionable: red cells = "I need to re-teach this")
+
+Click a cell → anonymized breakdown (counts, not individual names). Privacy preserved by always aggregating.
+
+**Match compare view** — two students' grids side by side, cells highlighted where one is strong and the other is weak. Visually obvious matches: "your red column is their green column."
+
+### 2.3 Why this layout works
+
+- **Time is free** — columns chronological = built-in timeline feel without a separate timeline view
+- **Scales** — works with 8 concepts or 40
+- **One component, four views** — student, diff, class, compare all render from the same grid primitive with different data sources
+- **Familiar** — anyone who's used GitHub immediately understands what they're looking at
+- **Zero viz libraries** — plain Tailwind CSS grid
+
+### 2.4 Stitches — the core matching metaphor
+
+When you layer two students' heatmaps, each cell is one of four overlap types:
+
+| Student A | Student B | Meaning |
+|---|---|---|
+| Green | Green | Redundant — both know it |
+| Red | Red | Shared gap — neither can help |
+| Green | Red (or vice versa) | **Stitch** — one teaches the other |
+| Empty | * | Not covered yet, no signal |
+
+A **stitch** is a single cell where mastery complements. The more stitches between two students, the more they can learn from each other. This is why the app is called Stitch — each pairing is literally a stitch between two heatmaps.
+
+**Pairwise stitch score** between students A and B:
+```python
+def stitch_score(A, B, cells):
+    score = 0
+    for cell in cells:
+        a, b = A.mastery[cell], B.mastery[cell]
+        if a >= 0.7 and b < 0.4:
+            score += (a - b)
+        elif b >= 0.7 and a < 0.4:
+            score += (b - a)
+    return score
+```
+Weighted by the mastery gap so extreme complements count more than marginal ones.
+
+**Personal stitch score** for a student = count of classmates whose pairwise score with them is above a threshold (e.g., 3.0). Answers "how many good partners exist for me in this class?"
+
+**Overlay UX — two modes:**
+
+1. **Side-by-side** — two grids next to each other, stitch cells highlighted in a distinct color across both grids
+2. **True overlay** — single merged grid where
+   - Green cells = their strength covers your weakness
+   - Red cells = your strength covers theirs
+   - Grey = no stitch (both strong, both weak, or not covered)
+   - Stitch count + total score shown at the top
+
+**Professor group formation:**
+
+- Professor picks group size (2–4) and clicks "Form Groups"
+- System partitions the class to maximize total stitch score across all groups
+- **Algorithm**: greedy for small classes (match the top-scoring pair first, remove them from the pool, repeat; then fill incomplete groups); local-search swap-and-improve for classes > 30
+- Groups render as small heatmap clusters — each group's collective coverage shown as a mini combined grid
+- Professor can drag students between groups; total score updates live
+- Export roster as CSV or push to LMS
 
 ---
 
@@ -76,10 +173,10 @@ enrollments(id, user_id, course_id, enrolled_at)
 ### 3.2 Concept graph
 
 ```sql
-concepts(id, course_id, label, description, position_x, position_y)
+concepts(id, course_id, label, description, order_index)
 prerequisites(from_concept_id, to_concept_id)
 
-subconcepts(id, concept_id, lecture_id, label, description, created_at)
+subconcepts(id, concept_id, lecture_id, label, description, order_index, created_at)
 ```
 
 ### 3.3 Lectures & transcripts
@@ -121,10 +218,19 @@ mastery_events(id, user_id, subconcept_id, delta, source, source_id, created_at)
 
 Concept-level mastery is **not stored** — it's computed on read as the mean of the user's subconcept mastery values under that concept.
 
-### 3.6 Matching (stubbed for now)
+### 3.6 Matching (computed on demand, mostly)
+
+Pairwise stitch scores are computed on-demand from `user_subconcept_mastery` — no need to cache unless class sizes get huge. When groups are formed, store them:
 
 ```sql
--- Deferred. Schema goes here when we build §8 Phase 7.
+study_groups(id, course_id, formed_by, group_size, total_stitch_score, created_at)
+group_members(group_id, user_id)
+```
+
+Optional cache table for performance (add if scoring gets slow at scale):
+```sql
+stitch_scores(user_a_id, user_b_id, course_id, score, computed_at)
+  -- refreshed when either user's mastery changes
 ```
 
 ---
@@ -141,10 +247,11 @@ Concept-level mastery is **not stored** — it's computed on read as the mean of
    - Returns a JSON structure: `{ concepts: [...], prerequisites: [...] }`
    - Validation pass (§6) confirms it looks right
    - Concepts written to DB
-5. Professor lands on a graph editor view
+5. Professor lands on a concept editor view
+   - List of extracted concepts with descriptions
    - Can rename, delete, add concepts manually
-   - Can add/remove prerequisite edges
-   - Drag to reposition nodes (stored in `position_x/y`)
+   - Can add/remove prerequisite edges via dropdown or simple UI (prereqs are stored but not visualized as a graph — they're just metadata used for matching and future features)
+   - Reorder concepts (controls their row order in the heatmap)
 6. Hits "Publish" — generates `join_code`, course becomes student-joinable
 
 **Extraction prompt:**
@@ -295,16 +402,10 @@ concept_mastery(user, concept) = mean(
 
 ### 5.4 Student heatmap view
 
-After submission, student sees a heatmap grid:
-- **Rows = concepts** (from syllabus extraction)
-- **Cells within each row = subconcepts** under that concept
-- Cell color intensity = mastery score (light → dark, or red → green)
-- Before/after delta highlighting which cells changed from this quiz
-
-The two-tier hierarchy maps directly onto the row/cell structure — no layout algorithm needed. The same component renders:
-- **Individual view** — a single student's mastery grid
-- **Class view** — professor sees all students stacked or averaged (same UI, different data source)
-- **Matching view** — overlay two students' grids; mismatched cells (one red, one green) surface natural study partner signals
+After submission, student sees:
+- Their personalized heatmap (concept rows × lecture columns, colored by subconcept mastery)
+- **Before/after delta** — cells that changed from this quiz briefly glow or animate, with a tooltip showing the mastery jump
+- Click any cell → side panel with that subconcept's description, recent quiz performance, and related concepts
 
 ---
 
@@ -356,7 +457,7 @@ Four things. That's it.
 | Transcription | ElevenLabs Scribe (batch + streaming) | Per spec |
 | LLM | Anthropic SDK (Claude Sonnet) | Reliable structured JSON output |
 
-Styling: Tailwind + shadcn/ui. Mastery viz: CSS grid (no graph library — see §10). PDF parsing: `unpdf`. Everything else is a file in the Next.js app.
+Styling: Tailwind + shadcn/ui. Heatmap: plain Tailwind CSS grid — no viz library needed. PDF parsing: `unpdf`. Everything else is a file in the Next.js app.
 
 ### 7.1 Why Next.js full-stack
 
@@ -441,18 +542,18 @@ Phases are ordered to get end-to-end working fast, then deepen each layer.
 - Concept editor UI (rename, delete, add, edge management)
 - Publish course + generate `join_code`
 
-### Phase 2 — Student enrollment + graph view (day 3)
+### Phase 2 — Student enrollment + heatmap view (day 3)
 - Student signup
 - Join-code flow
 - Initial mastery rows created
-- Read-only graph view for students (concepts at 0.5 mastery everywhere)
+- Read-only heatmap view for students (cells filled as lectures are uploaded, all at 0.5 mastery initially)
 
 ### Phase 3 — Lecture → subconcepts (day 4–5)
 - Lecture upload (start with text-paste; add audio upload; add live last)
 - Transcription integration
 - Subconcept extraction pipeline
 - Validation pass
-- Subconcepts appear as expandable children under their parent concepts in the graph view
+- New lecture appears as a new column in the heatmap; extracted subconcepts populate cells in that column
 
 ### Phase 4 — Quiz generation + professor tweak (day 6–7)
 - Quiz generation pipeline
@@ -472,8 +573,14 @@ Phases are ordered to get end-to-end working fast, then deepen each layer.
 - Transcript populates live in professor's view
 - On "End Lecture," triggers subconcept extraction automatically
 
-### Phase 7 — Matching (deferred)
-Only after Phases 0–5 are solid. Design doc and data model will be added to this spec when we get there.
+### Phase 7 — Stitches & group formation
+- Pairwise stitch score computation endpoint
+- Student view: ranked list of classmates by stitch score + overlay UI (side-by-side and true-overlay modes)
+- Personal stitch score surfaced on student dashboard
+- Professor view: class-wide stitch network
+- Group formation algorithm (greedy for < 30 students, local search for larger classes)
+- Drag-to-swap interface with live score updates
+- Export roster as CSV
 
 ---
 
@@ -487,7 +594,7 @@ POST /auth/login
 # Professor
 POST /courses                          create course
 POST /courses/:id/syllabus             upload + extract concepts
-GET  /courses/:id/concepts             current graph
+GET  /courses/:id/concepts             list concepts
 PATCH /concepts/:id                    edit concept
 POST /concepts                         manual add
 DELETE /concepts/:id
@@ -509,31 +616,24 @@ POST /quizzes/:id/publish
 # Student
 POST /enrollments                      { join_code }
 GET  /my/courses
-GET  /my/courses/:id/graph             personalized graph
+GET  /my/courses/:id/heatmap           personalized heatmap data
 GET  /my/courses/:id/quizzes           list published quizzes
 POST /quizzes/:id/attempts             start attempt
 POST /quiz-attempts/:id/responses      submit one answer
 POST /quiz-attempts/:id/submit         finalize + update mastery
-GET  /my/courses/:id/graph/diff        last quiz diff
+GET  /my/courses/:id/heatmap/diff      last quiz diff
+GET  /my/courses/:id/stitches          ranked list of classmates by stitch score
+GET  /my/courses/:id/stitches/:user_id overlay data (stitch cells + score)
+
+# Professor matching
+GET  /courses/:id/class-heatmap        aggregated class heatmap
+POST /courses/:id/form-groups          { group_size } → suggested partition
+PATCH /study-groups/:id/members        swap students between groups
 ```
 
 ---
 
-## 10. Visualization: Heatmap (Decided)
-
-The student mastery view is a **heatmap grid**, not a force-directed graph. Three reasons this wins for Stitch:
-
-1. **Hierarchy maps naturally** — concepts as rows, subconcepts as cells within each row. The two-tier data model already has this shape; the grid is just making it visible.
-
-2. **Matching becomes visual** — overlay two students' grids and differences pop out immediately. Red cells for one student, green for the other = natural study partner signal, no algorithm explanation required.
-
-3. **Class view is free** — stack all student grids and average mastery per cell. The same component renders individual and class-wide views without any new UI.
-
-Replaced: `react-force-graph-2d` (see §7 tech stack) is dropped in favor of a simple CSS/Tailwind grid. No layout engine needed.
-
----
-
-## 12. Open Questions
+## 10. Open Questions
 
 1. **PDF parsing for syllabi/lectures** — start with pasted text in Phase 1/3 to avoid PDF extraction complexity. Add PDF support as a Phase 1.5.
 2. **Regeneration cost** — professor hitting "regenerate" on 20 questions in a row burns tokens. Rate limit to N/min per professor.
@@ -544,10 +644,12 @@ Replaced: `react-force-graph-2d` (see §7 tech stack) is dropped in favor of a s
 
 ---
 
-## 13. Success Metrics
+## 11. Success Metrics
 
 - **Extraction quality** — professors accept >80% of LLM-extracted concepts without edits
 - **Quiz quality** — professors accept >60% of LLM-generated questions without edits
 - **Mastery divergence** — after 3 quizzes, pairwise mastery distance between students in the same course > 0.2 (if near zero, the update signal is broken)
 - **Quiz completion rate** — >70% of students who start a quiz finish it
 - **Time-to-publish** — professor can go from "lecture uploaded" to "quiz published" in under 10 minutes including tweaks
+- **Stitch density** — after 3 quizzes, the median student has ≥3 classmates with stitch score above threshold (means matching has real signal to work with)
+- **Group formation quality** — auto-formed groups score ≥80% of the optimal partition's total stitch score

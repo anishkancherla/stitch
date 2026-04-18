@@ -1,8 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
+import { Heatmap } from "@/components/Heatmap";
 import { createClient } from "@/lib/supabase/server";
 import { signOut } from "@/app/(auth)/actions";
+import {
+  buildCells,
+  type HeatmapConcept,
+  type HeatmapLecture,
+} from "@/lib/heatmap";
+import { MasteryControls } from "./MasteryControls";
 
 type Params = { id: string };
 
@@ -13,6 +20,9 @@ export default async function StudentCourseDetail({
 }) {
   const { id } = await params;
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   // RLS gates this read on is_enrolled(id), so a non-enrolled student
   // gets back nothing → 404.
@@ -21,8 +31,71 @@ export default async function StudentCourseDetail({
     .select("id, code, name")
     .eq("id", id)
     .single();
-
   if (!course) notFound();
+
+  const [
+    { data: conceptRows },
+    { data: lectureRows },
+    { data: subconceptRows },
+    { data: masteryRows },
+  ] = await Promise.all([
+    supabase
+      .from("concepts")
+      .select("id, label, position_y")
+      .eq("course_id", id)
+      .order("position_y", { ascending: true })
+      .order("label", { ascending: true }),
+    supabase
+      .from("lectures")
+      .select("id, title, started_at, created_at")
+      .eq("course_id", id)
+      .order("started_at", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("subconcepts")
+      .select("id, label, concept_id, lecture_id"),
+    supabase
+      .from("user_subconcept_mastery")
+      .select("subconcept_id, score")
+      .eq("user_id", user!.id),
+  ]);
+
+  const concepts: HeatmapConcept[] = (conceptRows ?? []).map((c) => ({
+    id: c.id,
+    label: c.label,
+  }));
+  const lectures: HeatmapLecture[] = (lectureRows ?? []).map((l, i) => ({
+    id: l.id,
+    label: `L${i + 1}`,
+    title: l.title,
+  }));
+  const masteryById = new Map<string, number>(
+    (masteryRows ?? []).map((m) => [m.subconcept_id, m.score])
+  );
+  const cells = buildCells(
+    concepts,
+    lectures,
+    (subconceptRows ?? []).map((s) => ({
+      id: s.id,
+      label: s.label,
+      concept_id: s.concept_id,
+      lecture_id: s.lecture_id,
+    })),
+    (sid) => masteryById.get(sid) ?? null
+  );
+
+  // Pre-render the +/- buttons per subconcept so we can pass them across the
+  // server→client boundary as JSX (functions aren't serializable, JSX is).
+  const subconceptActions: Record<string, React.ReactNode> = Object.fromEntries(
+    (subconceptRows ?? []).map((s) => [
+      s.id,
+      <MasteryControls
+        key={s.id}
+        courseId={course.id}
+        subconceptId={s.id}
+      />,
+    ])
+  );
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -47,7 +120,7 @@ export default async function StudentCourseDetail({
         }
       />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 pt-16 pb-16">
+      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-6 pt-16 pb-16">
         <Link
           href="/student"
           className="mb-4 text-sm text-muted hover:text-foreground"
@@ -65,13 +138,32 @@ export default async function StudentCourseDetail({
         </div>
 
         <section className="mt-12">
-          <h2 className="text-base font-medium text-foreground">
-            Your mastery
-          </h2>
-          <div className="mt-3 rounded-2xl border border-border bg-zinc-50 px-5 py-12 text-center">
-            <p className="text-sm text-muted">
-              Your personal heatmap lands in the next batch.
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-base font-medium text-foreground">
+              Your mastery
+            </h2>
+            <p className="text-xs text-muted">
+              Click any cell for the subconcept breakdown.
             </p>
+          </div>
+          <div className="mt-3">
+            <Heatmap
+              concepts={concepts}
+              lectures={lectures}
+              cells={cells}
+              subconceptActions={subconceptActions}
+              emptyState={
+                <>
+                  <p className="text-sm text-muted">
+                    Your professor hasn&apos;t added any concepts or lectures
+                    yet.
+                  </p>
+                  <p className="mt-1 text-sm text-muted">
+                    Once they do, your personal mastery heatmap renders here.
+                  </p>
+                </>
+              }
+            />
           </div>
         </section>
       </main>
