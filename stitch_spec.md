@@ -293,12 +293,18 @@ concept_mastery(user, concept) = mean(
 )
 ```
 
-### 5.4 Student graph view
+### 5.4 Student heatmap view
 
-After submission, student sees:
-- Their personalized graph (concepts as primary nodes, colored by mastery)
-- Expanded view: subconcepts under each concept, colored individually
-- Before/after delta showing which nodes moved from this quiz
+After submission, student sees a heatmap grid:
+- **Rows = concepts** (from syllabus extraction)
+- **Cells within each row = subconcepts** under that concept
+- Cell color intensity = mastery score (light → dark, or red → green)
+- Before/after delta highlighting which cells changed from this quiz
+
+The two-tier hierarchy maps directly onto the row/cell structure — no layout algorithm needed. The same component renders:
+- **Individual view** — a single student's mastery grid
+- **Class view** — professor sees all students stacked or averaged (same UI, different data source)
+- **Matching view** — overlay two students' grids; mismatched cells (one red, one green) surface natural study partner signals
 
 ---
 
@@ -350,7 +356,7 @@ Four things. That's it.
 | Transcription | ElevenLabs Scribe (batch + streaming) | Per spec |
 | LLM | Anthropic SDK (Claude Sonnet) | Reliable structured JSON output |
 
-Styling: Tailwind + shadcn/ui. Graph viz: react-force-graph-2d. PDF parsing: `unpdf`. Everything else is a file in the Next.js app.
+Styling: Tailwind + shadcn/ui. Mastery viz: CSS grid (no graph library — see §10). PDF parsing: `unpdf`. Everything else is a file in the Next.js app.
 
 ### 7.1 Why Next.js full-stack
 
@@ -513,7 +519,21 @@ GET  /my/courses/:id/graph/diff        last quiz diff
 
 ---
 
-## 10. Open Questions
+## 10. Visualization: Heatmap (Decided)
+
+The student mastery view is a **heatmap grid**, not a force-directed graph. Three reasons this wins for Stitch:
+
+1. **Hierarchy maps naturally** — concepts as rows, subconcepts as cells within each row. The two-tier data model already has this shape; the grid is just making it visible.
+
+2. **Matching becomes visual** — overlay two students' grids and differences pop out immediately. Red cells for one student, green for the other = natural study partner signal, no algorithm explanation required.
+
+3. **Class view is free** — stack all student grids and average mastery per cell. The same component renders individual and class-wide views without any new UI.
+
+Replaced: `react-force-graph-2d` (see §7 tech stack) is dropped in favor of a simple CSS/Tailwind grid. No layout engine needed.
+
+---
+
+## 12. Open Questions
 
 1. **PDF parsing for syllabi/lectures** — start with pasted text in Phase 1/3 to avoid PDF extraction complexity. Add PDF support as a Phase 1.5.
 2. **Regeneration cost** — professor hitting "regenerate" on 20 questions in a row burns tokens. Rate limit to N/min per professor.
@@ -524,7 +544,7 @@ GET  /my/courses/:id/graph/diff        last quiz diff
 
 ---
 
-## 11. Success Metrics
+## 13. Success Metrics
 
 - **Extraction quality** — professors accept >80% of LLM-extracted concepts without edits
 - **Quiz quality** — professors accept >60% of LLM-generated questions without edits
