@@ -145,6 +145,34 @@ export async function createStitchSpace(
   const MAX_STITCHES = 6;
   const trimmed = weakItems.slice(0, MAX_STITCHES);
 
+  // Pull lecture-derived materials for the trimmed weak subconcepts. Used
+  // to ground the planner prompt; subconcepts without a materials row
+  // (older lectures, or extraction misses) just go in unground and the
+  // planner falls back to label-only.
+  const trimmedIds = trimmed.map((w) => w.subconceptId);
+  const { data: matRows } = await admin
+    .from("subconcept_materials")
+    .select("subconcept_id, summary, key_points")
+    .in("subconcept_id", trimmedIds);
+  const matsBySubId = new Map<
+    string,
+    { summary: string; keyPoints: string[] }
+  >();
+  for (const m of matRows ?? []) {
+    const kp = Array.isArray(m.key_points) ? (m.key_points as string[]) : [];
+    matsBySubId.set(m.subconcept_id as string, {
+      summary: String(m.summary ?? ""),
+      keyPoints: kp.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0),
+    });
+  }
+  for (const w of trimmed) {
+    const mat = matsBySubId.get(w.subconceptId);
+    if (mat) {
+      if (mat.summary) w.summary = mat.summary;
+      if (mat.keyPoints.length > 0) w.keyPoints = mat.keyPoints;
+    }
+  }
+
   const members = [
     { userId: user.id, name: nameById.get(user.id) ?? "You" },
     { userId: partnerUserId, name: nameById.get(partnerUserId) ?? "Partner" },
@@ -172,7 +200,15 @@ export async function createStitchSpace(
       { conceptLabel: s.conceptLabel, subconceptLabel: s.label },
     ])
   );
-  const steps: SessionStep[] = expandPlan(stitches, meta);
+  // Pipe key_points through expandPlan so the snippet panel renders the
+  // prof's verbatim bullets, not anything the LLM authored.
+  const materialsForExpand = new Map<string, { keyPoints: string[] }>();
+  for (const [subId, mat] of matsBySubId) {
+    if (mat.keyPoints.length > 0) {
+      materialsForExpand.set(subId, { keyPoints: mat.keyPoints });
+    }
+  }
+  const steps: SessionStep[] = expandPlan(stitches, meta, materialsForExpand);
   if (steps.length === 0) {
     return { ok: false, error: "planner returned no usable steps" };
   }

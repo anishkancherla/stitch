@@ -1,8 +1,9 @@
 // Pure helpers for the ribbon. No React, no DB.
 //
 // A ribbon is one row of cells per subconcept, grouped by parent concept,
-// chronological by lecture order within each group. We never emit "empty"
-// cells — only subconcepts that actually exist show up.
+// chronological by lecture order within each group. Concepts with no
+// subconcepts yet (i.e. no lecture uploaded) are kept as empty groups so the
+// ribbon shows a grey segment for that week instead of dropping the column.
 
 export type RibbonCell = {
   subconceptId: string;
@@ -123,8 +124,9 @@ export type LectureMeta = {
  *   - Subconcepts grouped by parent concept; concepts in the order given.
  *   - Within a group, cells are chronological by lecture order, with
  *     subconcepts of the same lecture broken by label (stable).
- *   - Concepts that have zero subconcepts after filtering are dropped — no
- *     empty groups in the output.
+ *   - Concepts with zero subconcepts ARE kept and emitted with `cells: []`.
+ *     The Ribbon renders them as a grey segment (no signal), which is what
+ *     we want for weeks where the prof hasn't uploaded a lecture yet.
  */
 export function buildGroups(
   concepts: ConceptInput[],
@@ -145,7 +147,10 @@ export function buildGroups(
   const groups: RibbonGroup[] = [];
   for (const c of concepts) {
     const inGroup = subsByConcept.get(c.id) ?? [];
-    if (inGroup.length === 0) continue;
+    if (inGroup.length === 0) {
+      groups.push({ conceptId: c.id, conceptLabel: c.label, cells: [] });
+      continue;
+    }
 
     const cells: RibbonCell[] = inGroup
       .map((s) => {

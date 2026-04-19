@@ -18,19 +18,19 @@ const MAX_BYTES = 20 * 1024 * 1024; // 20 MB hard cap on the file itself.
 
 /**
  * Prof uploads a syllabus PDF for one of their courses. We hand the file to
- * Gemini, get back a list of weekly concepts, and for each one create:
+ * Gemini, get back a list of weekly concepts, and create one `concepts` row
+ * per week. That's it — no lectures, no subconcepts, no mastery rows.
  *
- *   - a `concepts` row (heatmap row)
- *   - a `lectures` row     (heatmap column)
- *   - a `subconcepts` row that ties them together (heatmap cell)
- *
- * The `trg_backfill_mastery_subconcept` trigger then fans out a 0.5 mastery
- * row to every currently-enrolled student. Net effect: a fully-populated
- * initial heatmap, gray everywhere, ready to be moved by quizzes / manual
- * adjustments.
+ * The ribbon then renders one grey row per concept until a real lecture is
+ * uploaded for that week. Uploading a lecture (`lecture-actions.uploadLecture`)
+ * is what brings a row to life: it creates the `lectures` row + per-subconcept
+ * rows + their `subconcept_materials`, and the
+ * `trg_backfill_mastery_subconcept` trigger fans out a 0.5 mastery row per
+ * enrolled student.
  *
  * To keep the action idempotent-ish, we refuse if the course already has any
- * concepts. Prof can delete them and re-upload if they want to re-init.
+ * concepts. Prof can delete the course (or its concepts) and re-upload if they
+ * want to re-init.
  */
 export async function uploadSyllabus(
   _prev: UploadSyllabusState,
@@ -112,73 +112,18 @@ export async function uploadSyllabus(
     return { ok: false, error: "Gemini didn't return any concepts." };
   }
 
-  // Anchor lecture timestamps to a fake week-by-week schedule starting today.
-  // Just gives `lectures.started_at` a stable order; doesn't matter for the
-  // heatmap math, which uses the inserted order via `started_at` ASC.
-  const weekStart = new Date();
-  weekStart.setHours(9, 0, 0, 0);
-
-  // Bulk insert concepts first, then look up their ids, then insert lectures
-  // and subconcepts. We can't do all three in one round-trip because
-  // subconcepts need both concept and lecture ids.
+  // Concepts only. No placeholder lectures or subconcepts — those get created
+  // by `uploadLecture` once the prof actually uploads slides for that week.
+  // Until then the row stays grey in the ribbon (no cells to color).
   const conceptRows = cleaned.map((c, i) => ({
     course_id: courseId,
     label: c.concept,
     position_y: i, // 0..N-1, top to bottom
   }));
-  const { data: insertedConcepts, error: cErr } = await supabase
-    .from("concepts")
-    .insert(conceptRows)
-    .select("id, label, position_y");
-  if (cErr || !insertedConcepts) {
-    return { ok: false, error: cErr?.message ?? "Failed to insert concepts." };
+  const { error: cErr } = await supabase.from("concepts").insert(conceptRows);
+  if (cErr) {
+    return { ok: false, error: cErr.message };
   }
-
-  const lectureRows = cleaned.map((c, i) => {
-    const ts = new Date(weekStart);
-    ts.setDate(ts.getDate() + i * 7);
-    return {
-      course_id: courseId,
-      title: `Week ${c.week || i + 1}: ${c.concept}`,
-      uploaded_by: user.id,
-      source_type: "text_upload" as const,
-      started_at: ts.toISOString(),
-      status: "ready" as const,
-    };
-  });
-  const { data: insertedLectures, error: lErr } = await supabase
-    .from("lectures")
-    .insert(lectureRows)
-    .select("id, title");
-  if (lErr || !insertedLectures) {
-    return { ok: false, error: lErr?.message ?? "Failed to insert lectures." };
-  }
-
-  // Pair them up. We inserted in the same order, but the DB doesn't guarantee
-  // returned-row order matches insert order — so resort by position_y for
-  // concepts and the title's "Week N" prefix for lectures.
-  const sortedConcepts = [...insertedConcepts].sort(
-    (a, b) => (a.position_y ?? 0) - (b.position_y ?? 0)
-  );
-  const lectureByTitle = new Map(insertedLectures.map((l) => [l.title, l.id]));
-
-  const subconceptRows = cleaned.map((c, i) => {
-    const concept = sortedConcepts[i];
-    const lectureId = lectureByTitle.get(`Week ${c.week || i + 1}: ${c.concept}`);
-    return {
-      concept_id: concept.id,
-      lecture_id: lectureId ?? null,
-      label: c.concept,
-    };
-  });
-  const { error: sErr } = await supabase.from("subconcepts").insert(subconceptRows);
-  if (sErr) {
-    return { ok: false, error: sErr.message };
-  }
-
-  // Mastery rows for enrolled students are inserted automatically by
-  // `trg_backfill_mastery_subconcept` (SECURITY DEFINER), so we don't need
-  // to touch user_subconcept_mastery here.
 
   revalidatePath(`/professor/courses/${courseId}`, "page");
 

@@ -15,9 +15,22 @@ export interface SyllabusExtractionResult {
  * Lecture-level subconcepts. Each string becomes a heatmap cell under
  * (parent concept × this lecture). We don't carry a `topic` because the
  * professor uploads under an already-chosen overarching concept.
+ *
+ * `materials` is parallel to `subconcepts` — same length, same order,
+ * same labels. Per-subconcept summary + key points extracted from the
+ * lecture text in the same single Gemini call. Used downstream to
+ * ground Stitch Space planner prompts and to render snippet panels in
+ * teach steps. Older callers can ignore `materials`.
  */
+export interface LectureSubconceptMaterial {
+  label: string;
+  summary: string;
+  keyPoints: string[];
+}
+
 export interface LectureExtractionResult {
   subconcepts: string[];
+  materials: LectureSubconceptMaterial[];
 }
 
 /**
@@ -65,20 +78,41 @@ Rules:
 `;
 
 protected readonly lecturePrompt: string = `
-Analyze this lecture and extract 3-5 overarching subconcepts students must master.
+Analyze this lecture and extract 3-5 overarching subconcepts students must master, along with grounding material for each so we can later quiz students and coach them when teaching peers.
 
 Return JSON with no markdown wrappers:
 {
-  "subconcepts": ["...", "..."]
+  "subconcepts": ["...", "..."],
+  "materials": [
+    {
+      "label": "<must match an entry in subconcepts, exact same string>",
+      "summary": "<1-2 sentence plain-prose explanation in the lecture's framing>",
+      "key_points": ["<bullet>", "<bullet>", "..."]
+    }
+  ]
 }
 
 Rules:
-- HARD LIMIT: 3-5 entries. More than 5 is a failure.
+- HARD LIMIT: 3-5 subconcepts. More than 5 is a failure.
 - Labels are syllabus-level headings (2-5 words, Title Case), not slide titles.
 - Merge related topics: Big-O/Omega/Theta/little-o/limit comparisons → "Asymptotic Notation". RAM model/operation counting/analysis motivation → "Algorithm Analysis Basics". Apply this logic to everything.
 - If you have > 5, keep merging the two most related entries until you don't.
 - Exclude logistics, policies, summaries, and Q&A slides.
 - Order by appearance in the document.
+
+Materials rules:
+- Exactly one materials entry per subconcept. Same order, same labels, same casing.
+- "summary" is 1-2 sentences in plain prose. No headings, no markdown, no lists. Use the lecture's own framing and notation.
+
+key_points is the most important field — students will see these strings literally as snippets in their study session. They MUST read like they came straight off the prof's slides, not from a textbook. Specifically:
+- 4-7 short strings. Each is a self-contained claim, formula, definition, example, or pitfall.
+- LIFT THEM VERBATIM from the slide text whenever the slide phrasing is already a clean standalone bullet. Do not soften, generalize, or rewrite for "clarity" — students benefit from hearing their professor's exact words.
+- Only paraphrase when the slide content is fragmented (e.g. spread across multiple bullets, or mid-sentence). In that case, stitch it into one short sentence using the slide's own terminology.
+- Preserve formulas exactly: "f(n) = O(g(n))" not "f of n equals big O of g of n".
+- Preserve numerical examples and concrete instances ("e.g. mergesort is O(n log n)") — don't strip them.
+- No filler ("This is important", "We will see"). No meta-references ("see slide 12"). No questions. No "Note that…".
+- If the lecture is sparse on a subconcept, give 4 bullets, not 7. Don't pad.
+- Do NOT invent content the lecture doesn't support.
 `;
 
   constructor(name: string) {
@@ -216,22 +250,67 @@ ${typeRules}`;
    * Hard cap + dedupe lecture results. Models occasionally exceed prompt
    * limits; this guarantees the contract and centralizes the cleanup that
    * every caller would otherwise repeat.
+   *
+   * Materials are matched to the surviving subconcepts by case-insensitive
+   * label. Any subconcept without a matching materials entry gets an empty
+   * placeholder so consumers don't have to handle missing rows; bad bullet
+   * data is dropped silently.
    */
   protected normalizeLectureResult(
     result: LectureExtractionResult,
     max = 5,
   ): LectureExtractionResult {
+    // Dedupe by lowercased key but keep the original-cased label so the
+    // ribbon and quiz UIs display "Asymptotic Notation" not "asymptotic
+    // notation". `keyByDeduped` is only used to align materials below.
     const seen = new Set<string>();
     const deduped: string[] = [];
+    const keyByDeduped: string[] = [];
     for (const raw of result.subconcepts ?? []) {
-      const key = String(raw ?? '').trim().toLowerCase();
-      if (!key) continue;
+      const trimmed = String(raw ?? '').trim();
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      deduped.push(key);
+      deduped.push(trimmed);
+      keyByDeduped.push(key);
       if (deduped.length >= max) break;
     }
-    return { subconcepts: deduped };
+
+    // Index materials by lowercased label for the lookup. Gemini emits the
+    // snake_case `key_points` from our prompt; tolerate camelCase too in
+    // case the model translates aggressively.
+    const matsByLabel = new Map<string, LectureSubconceptMaterial>();
+    type RawMat = {
+      label?: unknown;
+      summary?: unknown;
+      keyPoints?: unknown;
+      key_points?: unknown;
+    };
+    const rawMaterials = (result.materials ?? []) as unknown as RawMat[];
+    for (const m of rawMaterials) {
+      if (!m || typeof m !== 'object') continue;
+      const labelKey = String(m.label ?? '').trim().toLowerCase();
+      if (!labelKey) continue;
+      const summary = String(m.summary ?? '').trim();
+      const kpRaw = (Array.isArray(m.keyPoints) ? m.keyPoints : m.key_points) as unknown;
+      const keyPoints = Array.isArray(kpRaw)
+        ? kpRaw
+            .map((kp) => String(kp ?? '').trim())
+            .filter((kp) => kp.length > 0)
+            .slice(0, 7)
+        : [];
+      matsByLabel.set(labelKey, { label: labelKey, summary, keyPoints });
+    }
+
+    const materials: LectureSubconceptMaterial[] = deduped.map((label, i) => {
+      const matched = matsByLabel.get(keyByDeduped[i]);
+      return matched
+        ? { label, summary: matched.summary, keyPoints: matched.keyPoints }
+        : { label, summary: '', keyPoints: [] };
+    });
+
+    return { subconcepts: deduped, materials };
   }
 
   /**

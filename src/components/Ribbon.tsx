@@ -81,14 +81,15 @@ export function Ribbon({
     });
   }, [expandedId, selectedSubId, groups, onFocusChange]);
 
-  const totalCells = groups.reduce((n, g) => n + g.cells.length, 0);
-  if (totalCells === 0) {
+  // Only show the empty-state when there are NO concepts at all. Concepts
+  // without subconcepts (no lecture uploaded yet) still render — as a grey
+  // segment — so the user can see the full week-by-week shape of the course.
+  if (groups.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-border bg-zinc-50 px-5 py-12 text-center">
         {emptyState ?? (
           <p className="text-sm text-muted">
-            No subconcepts yet. Once a lecture is uploaded, the ribbon renders
-            here.
+            No concepts yet. Upload a syllabus to populate the ribbon.
           </p>
         )}
       </div>
@@ -96,6 +97,10 @@ export function Ribbon({
   }
 
   function toggleConcept(conceptId: string) {
+    // Empty groups (no subconcepts yet) are non-interactive — there's nothing
+    // to expand into.
+    const g = groups.find((gg) => gg.conceptId === conceptId);
+    if (!g || g.cells.length === 0) return;
     setExpandedId((curr) => (curr === conceptId ? null : conceptId));
     // Drop the sub-detail whenever the focused concept changes/closes.
     setSelectedSubId(null);
@@ -291,8 +296,12 @@ function ConceptSegment({
 }: ConceptSegmentProps) {
   const aggregate = conceptAggregate(group);
   const aggregateHex = cellHex(aggregate);
-  const aggregateLabel =
-    aggregate === null ? "no signal yet" : `aggregate ${fmt(aggregate)}`;
+  const isEmpty = group.cells.length === 0;
+  const aggregateLabel = isEmpty
+    ? "not covered yet"
+    : aggregate === null
+    ? "no signal yet"
+    : `aggregate ${fmt(aggregate)}`;
 
   return (
     <div
@@ -309,15 +318,22 @@ function ConceptSegment({
         isFirst ? "" : "border-l border-black/15",
       ].join(" ")}
     >
-      {/* Aggregate colour layer — visible when collapsed, fades on expand. */}
+      {/* Aggregate colour layer — visible when collapsed, fades on expand.
+          Empty groups (no lecture uploaded yet) are inert: no click handler,
+          default cursor, and the aria-label tells you why. */}
       <button
         type="button"
-        onClick={onToggle}
+        onClick={isEmpty ? undefined : onToggle}
+        disabled={isEmpty}
         title={`${group.conceptLabel} — ${aggregateLabel}`}
-        aria-label={`${group.conceptLabel}, ${aggregateLabel}. ${
-          isExpanded ? "Collapse" : "Expand to see subconcepts"
-        }`}
-        className="absolute inset-0 cursor-pointer"
+        aria-label={
+          isEmpty
+            ? `${group.conceptLabel}, ${aggregateLabel}.`
+            : `${group.conceptLabel}, ${aggregateLabel}. ${
+                isExpanded ? "Collapse" : "Expand to see subconcepts"
+              }`
+        }
+        className={`absolute inset-0 ${isEmpty ? "cursor-default" : "cursor-pointer"}`}
         style={{
           backgroundColor: aggregateHex,
           opacity: isExpanded ? 0 : 1,

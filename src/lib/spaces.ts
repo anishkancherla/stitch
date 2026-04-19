@@ -42,12 +42,20 @@ export interface TeachStep extends BaseStep {
   learnerUserId: string;
   /** Markdown-ish prompt the teacher reads to themselves. */
   instruction: string;
+  /** Talking points the teacher can use, lifted from the prof's lecture
+   *  material for this subconcept. Hidden from the learner during the
+   *  step so the learner can't peek. Empty when the planner had no
+   *  materials to ground against. */
+  teacherSnippets?: string[];
 }
 
 export interface LlmTeachStep extends BaseStep {
   type: "llm_teach";
   /** Both members read the primer and acknowledge with Done. */
   primer: string;
+  /** Same provenance as TeachStep.teacherSnippets but visible to BOTH
+   *  members — there's no teacher to "give it away" in an llm_teach. */
+  snippets?: string[];
 }
 
 export interface QuizQuestion {
@@ -91,6 +99,9 @@ export interface PlannerStitch {
   /** Free-text the teacher (or LLM) follows. Plain text or light markdown. */
   teachContent: string;
   questions: QuizQuestion[];
+  // teacherSnippets used to live here; we now pipe key_points straight from
+  // subconcept_materials in expandPlan() so the snippets users see are
+  // literally the prof's bullets — no LLM paraphrasing layer in between.
 }
 
 export interface PlannerOutput {
@@ -118,15 +129,29 @@ export interface CardRow extends CardId {
 // ---------------------------------------------------------------------------
 
 /** Flatten the planner's per-subconcept stitches into the linear step list
- *  the room page consumes. Each stitch becomes [teach|llm_teach, quiz]. */
+ *  the room page consumes. Each stitch becomes [teach|llm_teach, quiz].
+ *
+ *  `materialsBySubId` is the verbatim prof material indexed by subconcept.
+ *  `key_points` from the lecture upload are piped DIRECTLY into the
+ *  teach/llm_teach step's snippets array — no LLM step touches them, so
+ *  what the user sees in the room is literally what the prof's slides
+ *  said (modulo Gemini's slide-to-bullet extraction at upload time). */
 export function expandPlan(
   stitches: PlannerStitch[],
-  meta: Map<string, { conceptLabel: string; subconceptLabel: string }>
+  meta: Map<string, { conceptLabel: string; subconceptLabel: string }>,
+  materialsBySubId?: Map<string, { keyPoints: string[] }>
 ): SessionStep[] {
   const out: SessionStep[] = [];
   for (const s of stitches) {
     const m = meta.get(s.subconceptId);
     if (!m) continue;
+    const mat = materialsBySubId?.get(s.subconceptId);
+    // Snippet panel renders ≤4 bullets cleanly; trimming here keeps the
+    // visual tight. The full key_points list is still available in DB
+    // for future "see all" UI.
+    const snippets =
+      mat && mat.keyPoints.length > 0 ? mat.keyPoints.slice(0, 4) : undefined;
+
     if (s.mode === "peer_teach") {
       if (!s.teacherUserId || s.learnerUserIds.length !== 1) continue;
       out.push({
@@ -137,6 +162,7 @@ export function expandPlan(
         teacherUserId: s.teacherUserId,
         learnerUserId: s.learnerUserIds[0],
         instruction: s.teachContent,
+        teacherSnippets: snippets,
       });
       out.push({
         type: "quiz",
@@ -153,6 +179,7 @@ export function expandPlan(
         conceptLabel: m.conceptLabel,
         subconceptLabel: m.subconceptLabel,
         primer: s.teachContent,
+        snippets,
       });
       out.push({
         type: "quiz",

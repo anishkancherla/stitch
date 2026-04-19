@@ -24,6 +24,15 @@ export interface PlannerWeakItem {
   conceptLabel: string;
   /** Per-student mastery in [0,1]. Keys are the two member user_ids. */
   masteryByUser: Record<string, number>;
+  /** Optional 1-2 sentence digest of the prof's framing of this
+   *  subconcept (from subconcept_materials). Empty when no lecture
+   *  material was extracted for this subconcept. */
+  summary?: string;
+  /** Optional 4-7 short bullets pulled from the prof's slides. The
+   *  planner echoes these into the teach instruction and quiz
+   *  distractors, AND surfaces a curated subset back as teacher_snippets
+   *  on the resulting stitch. */
+  keyPoints?: string[];
 }
 
 export interface PlannerInput {
@@ -84,11 +93,20 @@ export class SpacesPlanner {
             return `    ${m.name}: ${score.toFixed(2)} (${label})`;
           })
           .join("\n");
+        const summaryLine = w.summary
+          ? `\n  prof_summary: ${w.summary}`
+          : "";
+        const keyPointsBlock =
+          w.keyPoints && w.keyPoints.length > 0
+            ? `\n  prof_key_points:\n${w.keyPoints
+                .map((kp) => `    - ${kp}`)
+                .join("\n")}`
+            : "";
         return `- subconcept_id: ${w.subconceptId}
   parent concept: ${w.conceptLabel}
   subconcept: ${w.subconceptLabel}
   mastery:
-${masteryLines}`;
+${masteryLines}${summaryLine}${keyPointsBlock}`;
       })
       .join("\n\n");
 
@@ -99,7 +117,7 @@ Two students are on a voice call (Zoom/Discord) and follow your script step by s
 The students:
 ${memberLines}
 
-Weak subconcepts (one or both students has mastery < ${input.weakThreshold}):
+Weak subconcepts (one or both students has mastery < ${input.weakThreshold}). When prof_summary and prof_key_points are present, they are extracted directly from the professor's lecture material — TREAT THEM AS GROUND TRUTH and base everything (teach_content, questions, teacher_snippets) on that framing rather than generic textbook knowledge.
 
 ${weakLines}
 
@@ -110,14 +128,16 @@ For each stitch:
 - If BOTH students are WEAK, mode = "llm_teach" — you teach both via a primer. Omit teacher_user_id and set learner_user_ids = [both user_ids].
 
 teach_content:
-- For peer_teach: a focused 2–4 sentence instruction TO the teacher describing what they need to cover (e.g. "Walk Adam through how recursion uses base cases vs recursive cases. Use a concrete example like factorial. Then make sure he can describe what would happen with no base case."). Address the teacher by name.
-- For llm_teach: a clear 4–8 sentence primer that teaches the subconcept directly to BOTH students. Plain prose, no headings.
+- For peer_teach: a focused 2–4 sentence instruction TO the teacher describing what they need to cover (e.g. "Walk Adam through how recursion uses base cases vs recursive cases. Use a concrete example like factorial. Then make sure he can describe what would happen with no base case."). Address the teacher by name. When prof_key_points exist, reference at least one of them by name in the instruction so the teacher knows the prof's specific framing.
+- For llm_teach: a clear 4–8 sentence primer that teaches the subconcept directly to BOTH students. Plain prose, no headings. Use the prof's framing where available.
+
+NOTE: A separate snippet panel will display prof_key_points to the teacher (or both students, in llm_teach) verbatim — you do NOT need to author or repeat them in teach_content. Just point at them, e.g. "Walk Olivia through the points in your snippet panel about base cases vs recursive cases."
 
 questions: 3 multiple-choice questions to verify the learner(s) actually understand the subconcept. Each question:
 - "prompt": a single concrete question
 - "choices": exactly 4 plausible options (no "all of the above")
 - "correct_index": integer 0–3 indicating which choice is correct
-Distractors should be wrong-but-plausible — avoid joke options.
+Distractors should be wrong-but-plausible — avoid joke options. When prof_key_points exist, pull at least one distractor from a real misconception related to one of those points.
 
 Return JSON matching this exact schema, no markdown wrappers, no commentary:
 

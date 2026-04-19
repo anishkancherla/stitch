@@ -116,6 +116,18 @@ function TeachView({
         {step.instruction}
       </p>
 
+      {/* Snippets are teacher-eyes-only. Showing them to the learner would
+          give away the answers and defeat the point of teaching back.
+          These are piped straight from subconcept_materials.key_points —
+          the prof's actual lecture bullets, no LLM rewriting in between. */}
+      {isTeacher && step.teacherSnippets && step.teacherSnippets.length > 0 && (
+        <SnippetPanel
+          title="From your professor's slides"
+          subtitle={`Lifted from your lecture material on ${step.subconceptLabel}. Your partner can't see this — use it as talking points.`}
+          items={step.teacherSnippets}
+        />
+      )}
+
       {isTeacher ? (
         <ActionBar
           onPrimary={() => onSubmit({ kind: "done" })}
@@ -165,6 +177,18 @@ function LlmTeachView({
       <p className="whitespace-pre-wrap text-base leading-relaxed text-foreground">
         {step.primer}
       </p>
+
+      {/* Both members are learners here, so it's fine for both to see the
+          source material. Same provenance as TeachStep snippets — these
+          are the prof's actual bullets, not LLM paraphrase. */}
+      {step.snippets && step.snippets.length > 0 && (
+        <SnippetPanel
+          title="From your professor's slides"
+          subtitle={`Lifted from your lecture material on ${step.subconceptLabel}.`}
+          items={step.snippets}
+        />
+      )}
+
       <ActionBar
         onPrimary={() => onSubmit({ kind: "done" })}
         primaryLabel={viewerSubmitted ? "Waiting on partner…" : "Got it"}
@@ -325,6 +349,38 @@ function StepFrame({
       {sub && <p className="mt-0.5 text-xs text-muted">{sub}</p>}
       <div className="mt-5">{children}</div>
     </section>
+  );
+}
+
+function SnippetPanel({
+  title,
+  subtitle,
+  items,
+}: {
+  title: string;
+  subtitle?: string;
+  items: string[];
+}) {
+  return (
+    <aside className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+      <p className="text-xs font-medium uppercase tracking-[0.18em] text-amber-700">
+        {title}
+      </p>
+      {subtitle && (
+        <p className="mt-0.5 text-xs text-amber-700/80">{subtitle}</p>
+      )}
+      <ul className="mt-3 space-y-2">
+        {items.map((it, i) => (
+          <li
+            key={i}
+            className="flex items-start gap-2 text-sm leading-relaxed text-amber-950"
+          >
+            <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-700" />
+            <span>{it}</span>
+          </li>
+        ))}
+      </ul>
+    </aside>
   );
 }
 

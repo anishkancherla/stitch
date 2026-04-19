@@ -102,17 +102,27 @@ export async function uploadLecture(
   }
 
   // The provider already hard-caps + dedupes; this is just a defensive
-  // belt-and-suspenders pass in case anything slipped through.
+  // belt-and-suspenders pass in case anything slipped through. We carry
+  // materials alongside so the (label, summary, key_points) triples stay
+  // aligned even after this filter.
   const seen = new Set<string>();
-  const subconcepts = (parsed.subconcepts ?? [])
-    .map((s) => String(s ?? "").trim())
-    .filter((label) => {
-      if (label.length === 0) return false;
-      const key = label.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+  const subconcepts: string[] = [];
+  const materials: { summary: string; keyPoints: string[] }[] = [];
+  const parsedSubs = parsed.subconcepts ?? [];
+  const parsedMats = parsed.materials ?? [];
+  for (let i = 0; i < parsedSubs.length; i++) {
+    const label = String(parsedSubs[i] ?? "").trim();
+    if (label.length === 0) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    subconcepts.push(label);
+    const mat = parsedMats[i];
+    materials.push({
+      summary: mat?.summary ?? "",
+      keyPoints: Array.isArray(mat?.keyPoints) ? mat.keyPoints : [],
     });
+  }
 
   if (subconcepts.length === 0) {
     return { ok: false, error: "Gemini didn't return any subconcepts." };
@@ -141,18 +151,53 @@ export async function uploadLecture(
     return { ok: false, error: lErr?.message ?? "Failed to insert lecture." };
   }
 
-  // Insert subconcepts (N new cells under (concept, lecture)).
+  // Insert subconcepts (N new cells under (concept, lecture)). We need the
+  // returned ids back to attach materials, so use `select`.
   const subRows = subconcepts.map((label) => ({
     concept_id: conceptId,
     lecture_id: lecture.id,
     label,
     description: null,
   }));
-  const { error: sErr } = await supabase.from("subconcepts").insert(subRows);
-  if (sErr) {
+  const { data: insertedSubs, error: sErr } = await supabase
+    .from("subconcepts")
+    .insert(subRows)
+    .select("id, label");
+  if (sErr || !insertedSubs) {
     // Best-effort cleanup so we don't leave an orphan empty lecture column.
     await supabase.from("lectures").delete().eq("id", lecture.id);
-    return { ok: false, error: sErr.message };
+    return { ok: false, error: sErr?.message ?? "Failed to insert subconcepts." };
+  }
+
+  // Persist per-subconcept materials. Match by label since the insert
+  // doesn't guarantee return order. Materials missing from the LLM (empty
+  // summary AND empty key_points) are skipped — defaulting to '' / '[]'
+  // would just be noise. Failure to persist materials is non-fatal: the
+  // lecture + subconcepts are already committed and the planner falls
+  // back to label-only grounding when materials are absent.
+  const matByLabel = new Map<string, { summary: string; keyPoints: string[] }>();
+  for (let i = 0; i < subconcepts.length; i++) {
+    matByLabel.set(subconcepts[i].toLowerCase(), materials[i]);
+  }
+  const matRows = insertedSubs
+    .map((row) => {
+      const m = matByLabel.get(String(row.label ?? "").toLowerCase());
+      if (!m) return null;
+      if (!m.summary && m.keyPoints.length === 0) return null;
+      return {
+        subconcept_id: row.id as string,
+        summary: m.summary,
+        key_points: m.keyPoints,
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+  if (matRows.length > 0) {
+    const { error: mErr } = await supabase
+      .from("subconcept_materials")
+      .insert(matRows);
+    if (mErr) {
+      console.warn("[uploadLecture] failed to persist materials:", mErr.message);
+    }
   }
 
   // Mastery rows for every enrolled student are inserted by

@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
 
 /* ----------------------------------------------------------------------------
  * Fonts
- *   Display (wordmark / headings):  Lora   (serif)
- *   Body / UI (everything else):    Geist  (sans)
+ *   Display (wordmark / headings):  Lora           (serif, local)
+ *   Body / UI (everything else):    Hanken Grotesk (sans, Google)
  *
- * Both are loaded from `src/fonts/` as single variable files. To swap them
- * out, replace the `src` path and update `--font-display-serif` /
- * `--font-sans-ui` consumers in globals.css.
+ * Lora is loaded from `src/fonts/`. To swap fonts, replace the source and
+ * update `--font-display-serif` / `--font-sans-ui` consumers in globals.css.
  * -------------------------------------------------------------------------- */
 
 const lora = localFont({
@@ -18,9 +18,9 @@ const lora = localFont({
   display: "swap",
 });
 
-const geist = localFont({
+const hankenGrotesk = Hanken_Grotesk({
   variable: "--font-sans-ui",
-  src: "../fonts/Geist.otf",
+  subsets: ["latin"],
   display: "swap",
 });
 
@@ -38,7 +38,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geist.variable} ${lora.variable} h-full antialiased`}
+      className={`${hankenGrotesk.variable} ${lora.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
