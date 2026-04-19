@@ -3,6 +3,8 @@ import {
   LLMProvider,
   SyllabusExtractionResult,
   LectureExtractionResult,
+  QuizGenerationInput,
+  QuizResult,
 } from './LLMProvider';
 import {
   extractPptxText,
@@ -167,6 +169,40 @@ export class AnthropicProvider extends LLMProvider {
         `Failed to parse JSON string returned by Anthropic: ${message}\nResponse: ${text}`,
       );
     }
+  }
+
+  async generateQuiz(
+    input: QuizGenerationInput,
+    isMcq: boolean = false,
+  ): Promise<QuizResult> {
+    const prompt = this.buildQuizPrompt(input, isMcq);
+
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 4000,
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: prompt }] },
+        { role: 'assistant', content: [{ type: 'text', text: '{' }] },
+      ],
+    } as any);
+
+    const text = this.extractTextFromResponse(response);
+    if (!text) {
+      throw new Error('No text returned from Anthropic API');
+    }
+    const candidate = text.trimStart().startsWith('{') ? text : `{${text}`;
+    const jsonString = this.extractJsonString(candidate);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonString);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown JSON parse error';
+      throw new Error(
+        `Failed to parse JSON string returned by Anthropic: ${message}\nResponse: ${text}`,
+      );
+    }
+    return this.normalizeQuizResult(parsed, isMcq);
   }
 
   private extractTextFromResponse(response: unknown): string {

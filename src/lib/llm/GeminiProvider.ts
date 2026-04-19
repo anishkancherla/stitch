@@ -3,6 +3,8 @@ import {
   LLMProvider,
   SyllabusExtractionResult,
   LectureExtractionResult,
+  QuizGenerationInput,
+  QuizResult,
 } from './LLMProvider';
 import {
   extractPptxText,
@@ -142,5 +144,35 @@ export class GeminiProvider extends LLMProvider {
         `Failed to parse JSON string returned by Gemini: ${message}\nResponse: ${text}`,
       );
     }
+  }
+
+  async generateQuiz(
+    input: QuizGenerationInput,
+    isMcq: boolean = false,
+  ): Promise<QuizResult> {
+    const prompt = this.buildQuizPrompt(input, isMcq);
+
+    const response = await this.ai.models.generateContent({
+      model: this.model,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { responseMimeType: 'application/json' },
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error('No text returned from Gemini API');
+    }
+
+    const jsonString = this.extractJsonString(text);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonString);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown JSON parse error';
+      throw new Error(
+        `Failed to parse JSON string returned by Gemini: ${message}\nResponse: ${text}`,
+      );
+    }
+    return this.normalizeQuizResult(parsed, isMcq);
   }
 }

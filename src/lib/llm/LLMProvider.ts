@@ -20,6 +20,30 @@ export interface LectureExtractionResult {
   subconcepts: string[];
 }
 
+/**
+ * Input for quiz generation. The `concept` is the umbrella topic for the
+ * quiz; `subconcepts` are the lecture-level sub-topics the quiz must cover.
+ */
+export interface QuizGenerationInput {
+  concept: string;
+  subconcepts: string[];
+}
+
+export interface MCQQuestion {
+  question: string;
+  choices: string[];
+  answer: string;
+}
+
+export interface FreeResponseQuestion {
+  question: string;
+  answer: string;
+}
+
+export interface QuizResult {
+  questions: MCQQuestion[] | FreeResponseQuestion[];
+}
+
 export abstract class LLMProvider {
   readonly name: string;
 
@@ -80,6 +104,115 @@ Rules:
   abstract parseLecture(file: Blob, mimeType?: string): Promise<LectureExtractionResult>;
 
   /**
+   * Generate a short quiz for a single concept and its subconcepts.
+   * @param input  The concept (umbrella topic) and the subconcepts to cover.
+   * @param isMcq  When true, every question has 4 choices and a correct
+   *               answer; when false/omitted, questions are free-response
+   *               with a model answer.
+   */
+  abstract generateQuiz(
+    input: QuizGenerationInput,
+    isMcq?: boolean,
+  ): Promise<QuizResult>;
+
+  /**
+   * Build the prompt for quiz generation. Kept on the base class so both
+   * providers stay in sync on schema + rules.
+   */
+  protected buildQuizPrompt(
+    input: QuizGenerationInput,
+    isMcq: boolean,
+  ): string {
+    const subList = input.subconcepts
+      .map((s, i) => `  ${i + 1}. ${s}`)
+      .join('\n');
+
+    const schema = isMcq
+      ? `{
+  "questions": [
+    {
+      "question": "...",
+      "choices": ["...", "...", "...", "..."],
+      "answer": "..."
+    }
+  ]
+}`
+      : `{
+  "questions": [
+    { "question": "...", "answer": "..." }
+  ]
+}`;
+
+    const typeRules = isMcq
+      ? `- Each question MUST have exactly 4 choices.
+- "answer" MUST exactly match one of the entries in "choices".
+- Distractors should be plausible, not obviously wrong.`
+      : `- Each question is short-answer / free-response.
+- "answer" should be a concise model answer (1-3 sentences).`;
+
+    return `You are writing a short quiz for a college student studying the concept below.
+
+Concept: ${input.concept}
+Subconcepts to cover:
+${subList}
+
+Generate 5 questions that, together, cover the listed subconcepts.
+
+Return JSON matching this schema exactly with no markdown wrappers:
+${schema}
+
+Rules:
+- Output JSON only. No prose, no \`\`\` fences.
+- Distribute questions across the subconcepts; don't pile them onto one.
+- Questions should test understanding, not pure recall of trivia.
+${typeRules}`;
+  }
+
+  /**
+   * Validate + lightly normalize a parsed quiz response. Throws when the
+   * shape is wrong so callers don't have to re-check.
+   */
+  protected normalizeQuizResult(parsed: unknown, isMcq: boolean): QuizResult {
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('Quiz response is not an object.');
+    }
+    const questions = (parsed as { questions?: unknown }).questions;
+    if (!Array.isArray(questions) || questions.length === 0) {
+      throw new Error('Quiz response missing non-empty `questions` array.');
+    }
+
+    if (isMcq) {
+      const cleaned: MCQQuestion[] = questions.map((q, i) => {
+        const obj = q as Partial<MCQQuestion>;
+        if (
+          typeof obj.question !== 'string' ||
+          !Array.isArray(obj.choices) ||
+          obj.choices.length !== 4 ||
+          !obj.choices.every((c) => typeof c === 'string') ||
+          typeof obj.answer !== 'string'
+        ) {
+          throw new Error(`MCQ question ${i} has invalid shape.`);
+        }
+        return {
+          question: obj.question,
+          choices: obj.choices,
+          answer: obj.answer,
+        };
+      });
+      return { questions: cleaned };
+    }
+
+    const cleaned: FreeResponseQuestion[] = questions.map((q, i) => {
+      const obj = q as Partial<FreeResponseQuestion>;
+      if (typeof obj.question !== 'string' || typeof obj.answer !== 'string') {
+        throw new Error(`Free-response question ${i} has invalid shape.`);
+      }
+      return { question: obj.question, answer: obj.answer };
+    });
+    return { questions: cleaned };
+  }
+
+  /**
    * Hard cap + dedupe lecture results. Models occasionally exceed prompt
    * limits; this guarantees the contract and centralizes the cleanup that
    * every caller would otherwise repeat.
@@ -91,12 +224,11 @@ Rules:
     const seen = new Set<string>();
     const deduped: string[] = [];
     for (const raw of result.subconcepts ?? []) {
-      const label = String(raw ?? '').trim();
-      if (!label) continue;
-      const key = label.toLowerCase();
+      const key = String(raw ?? '').trim().toLowerCase();
+      if (!key) continue;
       if (seen.has(key)) continue;
       seen.add(key);
-      deduped.push(label);
+      deduped.push(key);
       if (deduped.length >= max) break;
     }
     return { subconcepts: deduped };
