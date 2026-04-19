@@ -10,9 +10,14 @@
 !.yarn/releases
 !.yarn/versions
 
-# local ribbon docs (not tracked)
+# local design / spec docs (not tracked)
 ribbon.md
 ribbonguide.md
+/mdfiles/
+/README.md
+/AGENTS.md
+/CLAUDE.md
+/quiz_integration_plan.md
 
 # testing
 /coverage

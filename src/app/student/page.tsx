@@ -1,10 +1,17 @@
 import Link from "next/link";
 import { TopBar } from "@/components/TopBar";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { signOut } from "../(auth)/actions";
 import { JoinCourseForm } from "./JoinCourseForm";
 
-export default async function StudentHome() {
+interface StudentHomeProps {
+  searchParams: Promise<{ spaceError?: string }>;
+}
+
+export default async function StudentHome({ searchParams }: StudentHomeProps) {
+  const { spaceError } = await searchParams;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -12,17 +19,57 @@ export default async function StudentHome() {
 
   // RLS on `courses` for students = is_enrolled(id), so this naturally
   // returns only the courses this student has joined.
-  const [{ data: profile }, { data: courses }] = await Promise.all([
-    supabase
-      .from("users")
-      .select("name, email")
-      .eq("id", user!.id)
-      .single(),
-    supabase
+  const [{ data: profile }, { data: courses }, { data: spaceMembers }] =
+    await Promise.all([
+      supabase
+        .from("users")
+        .select("name, email")
+        .eq("id", user!.id)
+        .single(),
+      supabase
+        .from("courses")
+        .select("id, code, name")
+        .order("code", { ascending: true }),
+      supabase
+        .from("stitch_space_members")
+        .select("space_id, stitch_spaces!inner(id, status, course_id, created_at)")
+        .eq("user_id", user!.id),
+    ]);
+
+  // Filter to in-progress rooms (status='active') and pull a course label
+  // for each. Admin client only needed if we want partner names — skipped
+  // here, the room itself shows them.
+  type SpaceRow = {
+    id: string;
+    status: string;
+    course_id: string;
+    created_at: string;
+  };
+  const openSpaces: SpaceRow[] = ((spaceMembers ?? [])
+    .map((r) =>
+      Array.isArray(r.stitch_spaces) ? r.stitch_spaces[0] : r.stitch_spaces
+    )
+    .filter(
+      (s): s is SpaceRow => !!s && (s as SpaceRow).status === "active"
+    )) as SpaceRow[];
+
+  let courseLabelById = new Map<string, string>();
+  if (openSpaces.length > 0) {
+    const admin = createAdminClient();
+    const { data: courseRows } = await admin
       .from("courses")
       .select("id, code, name")
-      .order("code", { ascending: true }),
-  ]);
+      .in(
+        "id",
+        openSpaces.map((s) => s.course_id)
+      );
+    courseLabelById = new Map(
+      (courseRows ?? []).map((c) => [
+        c.id as string,
+        `${c.code as string} · ${c.name as string}`,
+      ])
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -54,6 +101,42 @@ export default async function StudentHome() {
         <h1 className="mt-1 font-display text-4xl tracking-tight text-foreground">
           {profile?.name || profile?.email}
         </h1>
+
+        {spaceError && (
+          <div className="mt-6 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            Couldn&apos;t start a Stitch Space: {spaceError}
+          </div>
+        )}
+
+        {openSpaces.length > 0 && (
+          <section className="mt-10">
+            <h2 className="text-base font-medium text-foreground">
+              Open Stitch Spaces
+            </h2>
+            <ul className="mt-3 space-y-2">
+              {openSpaces.map((s) => (
+                <li key={s.id}>
+                  <Link
+                    href={`/space/${s.id}`}
+                    className="flex items-center justify-between rounded-2xl border border-foreground/30 bg-foreground/5 px-5 py-4 transition-colors hover:bg-foreground/10"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted">
+                        Live session
+                      </p>
+                      <p className="mt-0.5 truncate text-sm font-medium text-foreground">
+                        {courseLabelById.get(s.course_id) ?? "Course"}
+                      </p>
+                    </div>
+                    <span className="ml-3 shrink-0 rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background">
+                      Join →
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <section className="mt-12">
           <h2 className="text-base font-medium text-foreground">

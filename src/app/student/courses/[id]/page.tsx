@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
-import { Ribbon } from "@/components/Ribbon";
+import { StudentRibbon } from "@/components/StudentRibbon";
 import { createClient } from "@/lib/supabase/server";
 import { signOut } from "@/app/(auth)/actions";
 import { buildGroups } from "@/lib/ribbon";
@@ -147,7 +147,8 @@ export default async function StudentCourseDetail({
             </p>
           </div>
           <div className="mt-3">
-            <Ribbon
+            <StudentRibbon
+              courseId={course.id}
               groups={groups}
               cellActions={cellActions}
               caption="Your mastery"

@@ -3,6 +3,8 @@ import { TopBar } from "@/components/TopBar";
 import { createClient } from "@/lib/supabase/server";
 import { signOut } from "../(auth)/actions";
 import { ProfileForm } from "./ProfileForm";
+import { AvailabilityEditor } from "@/components/AvailabilityEditor";
+import { getMyAvailability } from "./availability-actions";
 
 export default async function ProfilePage() {
   const supabase = await createClient();
@@ -17,6 +19,12 @@ export default async function ProfilePage() {
     .single();
 
   const home = profile?.role === "professor" ? "/professor" : "/student";
+
+  // Availability is student-only — professors don't get matched.
+  const availability =
+    profile?.role === "student" ? await getMyAvailability() : null;
+  const initialBlocks =
+    availability && availability.ok ? availability.blocks : [];
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -33,7 +41,7 @@ export default async function ProfilePage() {
         }
       />
 
-      <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-6 pt-16">
+      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-6 pt-16 pb-16">
         <Link
           href={home}
           className="mb-4 text-sm text-muted hover:text-foreground"
@@ -56,9 +64,20 @@ export default async function ProfilePage() {
           />
         </dl>
 
-        <div className="mt-8">
+        <div className="mt-8 max-w-md">
           <ProfileForm initialName={profile?.name ?? ""} />
         </div>
+
+        {profile?.role === "student" && (
+          <section className="mt-12">
+            <h2 className="font-display text-xl text-foreground">
+              Weekly availability
+            </h2>
+            <div className="mt-3">
+              <AvailabilityEditor initialBlocks={initialBlocks} />
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );

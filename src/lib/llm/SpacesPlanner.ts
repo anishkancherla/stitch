@@ -1,0 +1,256 @@
+import { GoogleGenAI } from "@google/genai";
+import {
+  PlannerOutput,
+  PlannerStitch,
+  QuizQuestion,
+} from "../spaces";
+
+/**
+ * Plan a Stitch Space session.
+ *
+ * Inputs are the union of weak subconcepts across both students plus per-
+ * subconcept mastery so the LLM knows who teaches whom. Output is the
+ * `PlannerOutput` shape from src/lib/spaces.ts — server expands it into
+ * the linear step list before storing.
+ *
+ * Single Gemini call: the prompt asks for ordered stitches AND the quiz
+ * questions for each. Round-trip per-stitch would be slower and offers
+ * no real win for a 4-8 stitch session.
+ */
+
+export interface PlannerWeakItem {
+  subconceptId: string;
+  subconceptLabel: string;
+  conceptLabel: string;
+  /** Per-student mastery in [0,1]. Keys are the two member user_ids. */
+  masteryByUser: Record<string, number>;
+}
+
+export interface PlannerInput {
+  members: { userId: string; name: string }[];
+  weakItems: PlannerWeakItem[];
+  /** Threshold below which a student is "weak" on the subconcept. */
+  weakThreshold: number;
+}
+
+export class SpacesPlanner {
+  private ai: GoogleGenAI;
+  private model: string;
+
+  constructor(model = "gemini-2.5-flash") {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is not set. Add it to your .env file.");
+    }
+    this.ai = new GoogleGenAI({ apiKey });
+    this.model = model;
+  }
+
+  async plan(input: PlannerInput): Promise<PlannerOutput> {
+    const prompt = this.buildPrompt(input);
+
+    const response = await this.ai.models.generateContent({
+      model: this.model,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { responseMimeType: "application/json" },
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No text returned from Gemini API");
+
+    const cleaned = stripFences(text);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "unknown JSON parse error";
+      throw new Error(`Planner returned invalid JSON: ${msg}\nResponse: ${text}`);
+    }
+
+    return normalizePlannerOutput(parsed, input);
+  }
+
+  private buildPrompt(input: PlannerInput): string {
+    const memberLines = input.members
+      .map((m) => `- ${m.name}  (user_id: ${m.userId})`)
+      .join("\n");
+
+    const weakLines = input.weakItems
+      .map((w) => {
+        const masteryLines = input.members
+          .map((m) => {
+            const score = w.masteryByUser[m.userId] ?? 0.5;
+            const label = score < input.weakThreshold ? "WEAK" : "OK";
+            return `    ${m.name}: ${score.toFixed(2)} (${label})`;
+          })
+          .join("\n");
+        return `- subconcept_id: ${w.subconceptId}
+  parent concept: ${w.conceptLabel}
+  subconcept: ${w.subconceptLabel}
+  mastery:
+${masteryLines}`;
+      })
+      .join("\n\n");
+
+    return `You are designing a synchronous, two-student peer study session called a "Stitch Space".
+
+Two students are on a voice call (Zoom/Discord) and follow your script step by step. You direct everything: who teaches what, in what order, and you author the quiz questions used to verify the weaker student actually learned the concept.
+
+The students:
+${memberLines}
+
+Weak subconcepts (one or both students has mastery < ${input.weakThreshold}):
+
+${weakLines}
+
+Your job: emit one "stitch" per weak subconcept above, in the pedagogical order YOU think is best (e.g. start with foundational concepts, alternate teachers so neither student is just teaching for 30 minutes, etc.).
+
+For each stitch:
+- If exactly ONE student is WEAK on this subconcept, mode = "peer_teach" — the OTHER (stronger) student teaches. Set teacher_user_id to the strong student and learner_user_ids = [the weak student].
+- If BOTH students are WEAK, mode = "llm_teach" — you teach both via a primer. Omit teacher_user_id and set learner_user_ids = [both user_ids].
+
+teach_content:
+- For peer_teach: a focused 2–4 sentence instruction TO the teacher describing what they need to cover (e.g. "Walk Adam through how recursion uses base cases vs recursive cases. Use a concrete example like factorial. Then make sure he can describe what would happen with no base case."). Address the teacher by name.
+- For llm_teach: a clear 4–8 sentence primer that teaches the subconcept directly to BOTH students. Plain prose, no headings.
+
+questions: 3 multiple-choice questions to verify the learner(s) actually understand the subconcept. Each question:
+- "prompt": a single concrete question
+- "choices": exactly 4 plausible options (no "all of the above")
+- "correct_index": integer 0–3 indicating which choice is correct
+Distractors should be wrong-but-plausible — avoid joke options.
+
+Return JSON matching this exact schema, no markdown wrappers, no commentary:
+
+{
+  "stitches": [
+    {
+      "subconcept_id": "<copy from input>",
+      "mode": "peer_teach" | "llm_teach",
+      "teacher_user_id": "<user_id, or omit if llm_teach>",
+      "learner_user_ids": ["<user_id>", ...],
+      "teach_content": "...",
+      "questions": [
+        { "prompt": "...", "choices": ["...", "...", "...", "..."], "correct_index": 0 }
+      ]
+    }
+  ]
+}
+
+Hard rules:
+- Output ONE stitch per weak subconcept above. Do not invent new subconcepts.
+- subconcept_id MUST be one of the IDs listed above.
+- All user_ids referenced MUST be one of the two listed above.
+- For peer_teach: teacher_user_id must be the student who is OK on the subconcept; learner_user_ids must contain only the WEAK student.
+- Output JSON only.`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Normalisation. The LLM is reliable but not infallible — clamp the output
+// to the schema callers actually expect, drop malformed stitches rather
+// than crash the whole session.
+// ---------------------------------------------------------------------------
+
+function normalizePlannerOutput(
+  raw: unknown,
+  input: PlannerInput
+): PlannerOutput {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("Planner response is not an object");
+  }
+  const stitchesIn = (raw as { stitches?: unknown }).stitches;
+  if (!Array.isArray(stitchesIn)) {
+    throw new Error("Planner response missing `stitches` array");
+  }
+
+  const validSubIds = new Set(input.weakItems.map((w) => w.subconceptId));
+  const validUserIds = new Set(input.members.map((m) => m.userId));
+
+  const out: PlannerStitch[] = [];
+  for (const s of stitchesIn) {
+    if (!s || typeof s !== "object") continue;
+    const obj = s as Record<string, unknown>;
+    const subconceptId = String(obj.subconcept_id ?? "");
+    if (!validSubIds.has(subconceptId)) continue;
+
+    const mode = obj.mode === "llm_teach" ? "llm_teach" : "peer_teach";
+    const learners = Array.isArray(obj.learner_user_ids)
+      ? (obj.learner_user_ids as unknown[])
+          .map(String)
+          .filter((u) => validUserIds.has(u))
+      : [];
+    if (learners.length === 0) continue;
+
+    const teacherUserId =
+      mode === "peer_teach" ? String(obj.teacher_user_id ?? "") : undefined;
+    if (
+      mode === "peer_teach" &&
+      (!teacherUserId ||
+        !validUserIds.has(teacherUserId) ||
+        learners.includes(teacherUserId) ||
+        learners.length !== 1)
+    ) {
+      continue;
+    }
+
+    const teachContent = String(obj.teach_content ?? "").trim();
+    if (!teachContent) continue;
+
+    const questions = normalizeQuestions(obj.questions);
+    if (questions.length === 0) continue;
+
+    out.push({
+      subconceptId,
+      mode,
+      teacherUserId,
+      learnerUserIds: learners,
+      teachContent,
+      questions,
+    });
+  }
+
+  if (out.length === 0) {
+    throw new Error("Planner returned no usable stitches");
+  }
+  return { stitches: out };
+}
+
+function normalizeQuestions(raw: unknown): QuizQuestion[] {
+  if (!Array.isArray(raw)) return [];
+  const out: QuizQuestion[] = [];
+  for (const q of raw) {
+    if (!q || typeof q !== "object") continue;
+    const obj = q as Record<string, unknown>;
+    const prompt = String(obj.prompt ?? "").trim();
+    const choicesRaw = obj.choices;
+    if (!prompt || !Array.isArray(choicesRaw) || choicesRaw.length !== 4) {
+      continue;
+    }
+    const choices = choicesRaw.map((c) => String(c).trim());
+    if (choices.some((c) => !c)) continue;
+    const correctIndexRaw = obj.correct_index;
+    const correctIndex =
+      typeof correctIndexRaw === "number" && Number.isInteger(correctIndexRaw)
+        ? correctIndexRaw
+        : -1;
+    if (correctIndex < 0 || correctIndex > 3) continue;
+    out.push({
+      prompt,
+      choices: [choices[0], choices[1], choices[2], choices[3]],
+      correctIndex,
+    });
+  }
+  return out;
+}
+
+function stripFences(text: string): string {
+  const trimmed = text
+    .trim()
+    .replace(/^\s*```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) return trimmed;
+  return trimmed.slice(start, end + 1);
+}

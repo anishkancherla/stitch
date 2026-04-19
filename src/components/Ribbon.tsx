@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   cellColorClass,
   cellHex,
@@ -9,6 +9,15 @@ import {
   type RibbonCell,
   type RibbonGroup,
 } from "@/lib/ribbon";
+
+/** What's currently in focus on the ribbon. Drives contextual UI below
+ *  (the matching panel on student pages). */
+export type RibbonFocus = {
+  conceptId: string;
+  conceptLabel: string;
+  subconceptId: string | null;
+  subconceptLabel: string | null;
+};
 
 export interface RibbonProps {
   groups: RibbonGroup[];
@@ -19,6 +28,10 @@ export interface RibbonProps {
   emptyState?: React.ReactNode;
   /** Optional label above the strip (e.g. "Your mastery", "Class average"). */
   caption?: React.ReactNode;
+  /** Fires whenever the focused concept/subconcept changes. Null when the
+   *  user collapses the active concept. The Ribbon stays uncontrolled —
+   *  parents just observe focus, they don't drive it. */
+  onFocusChange?: (focus: RibbonFocus | null) => void;
 }
 
 function fmt(v: number): string {
@@ -32,12 +45,41 @@ const EXPAND_GROW = 4;
 const EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
 const ANIM_MS = 400;
 
-export function Ribbon({ groups, cellActions, emptyState, caption }: RibbonProps) {
+export function Ribbon({
+  groups,
+  cellActions,
+  emptyState,
+  caption,
+  onFocusChange,
+}: RibbonProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedSubId, setSelectedSubId] = useState<string | null>(null);
   // Unique per-instance so multiple ribbons on the same page don't collide
   // on the SVG filter id.
   const filterId = `ribbon-fabric-${useId().replace(/:/g, "")}`;
+
+  // Surface focus changes to the parent. Concept-level focus fires on
+  // expand; subconcept focus fires when a sub-bar inside the expanded
+  // concept is clicked. Collapsing emits null.
+  useEffect(() => {
+    if (!onFocusChange) return;
+    if (!expandedId) {
+      onFocusChange(null);
+      return;
+    }
+    const g = groups.find((gg) => gg.conceptId === expandedId);
+    if (!g) return;
+    const sub =
+      selectedSubId
+        ? g.cells.find((c) => c.subconceptId === selectedSubId) ?? null
+        : null;
+    onFocusChange({
+      conceptId: g.conceptId,
+      conceptLabel: g.conceptLabel,
+      subconceptId: sub?.subconceptId ?? null,
+      subconceptLabel: sub?.label ?? null,
+    });
+  }, [expandedId, selectedSubId, groups, onFocusChange]);
 
   const totalCells = groups.reduce((n, g) => n + g.cells.length, 0);
   if (totalCells === 0) {
