@@ -155,6 +155,16 @@ export default async function StudentCourseDetail({
             Your personal mastery across every concept in this course.
           </p>
 
+          <div className="mt-5">
+            <Link
+              href={`/student/courses/${course.id}/quizzes`}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
+            >
+              Weekly quizzes
+              <span className="text-muted">→</span>
+            </Link>
+          </div>
+
           {/* Quick-glance summary: avg mastery, plus how many subconcepts
               are still shaky vs locked in. Mirrors the prof's per-student
               detail page so the visual language is consistent. */}

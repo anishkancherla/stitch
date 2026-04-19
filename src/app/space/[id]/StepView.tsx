@@ -1,9 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { QuizStep, SessionStep } from "@/lib/spaces";
+import { StitchAIChat } from "@/components/StitchAIChat";
+import {
+  getQuizHint,
+  getQuizFeedback,
+  QuizFeedbackItem,
+} from "./chat-actions";
 
 interface StepViewProps {
+  /** Required so AI server actions can identify the room. */
+  spaceId: string;
   step: SessionStep;
   /** Reset internal state on step change. */
   stepIdx: number;
@@ -27,6 +35,7 @@ interface StepViewProps {
  *   - quiz      → MCQ form (only target users act). Server grades.
  */
 export function StepView({
+  spaceId,
   step,
   stepIdx,
   viewerUserId,
@@ -37,42 +46,63 @@ export function StepView({
   submitting,
   onSubmit,
 }: StepViewProps) {
+  // Stitch AI is rendered alongside every step type. Local state lives
+  // inside the panel; we just give it the (spaceId, stepIdx) so it can
+  // reach the right step on the server.
+  const chat = (
+    <StitchAIChat
+      spaceId={spaceId}
+      stepIdx={stepIdx}
+      subconceptLabel={step.subconceptLabel}
+    />
+  );
+
   switch (step.type) {
     case "teach":
       return (
-        <TeachView
-          step={step}
-          viewerUserId={viewerUserId}
-          memberNames={memberNames}
-          partnerName={partnerName}
-          viewerSubmitted={viewerSubmitted}
-          viewerIsRequired={viewerIsRequired}
-          submitting={submitting}
-          onSubmit={onSubmit}
-        />
+        <>
+          <TeachView
+            step={step}
+            viewerUserId={viewerUserId}
+            memberNames={memberNames}
+            partnerName={partnerName}
+            viewerSubmitted={viewerSubmitted}
+            viewerIsRequired={viewerIsRequired}
+            submitting={submitting}
+            onSubmit={onSubmit}
+          />
+          {chat}
+        </>
       );
     case "llm_teach":
       return (
-        <LlmTeachView
-          step={step}
-          partnerName={partnerName}
-          viewerSubmitted={viewerSubmitted}
-          submitting={submitting}
-          onSubmit={onSubmit}
-        />
+        <>
+          <LlmTeachView
+            step={step}
+            partnerName={partnerName}
+            viewerSubmitted={viewerSubmitted}
+            submitting={submitting}
+            onSubmit={onSubmit}
+          />
+          {chat}
+        </>
       );
     case "quiz":
       return (
-        <QuizView
-          step={step}
-          stepIdx={stepIdx}
-          viewerUserId={viewerUserId}
-          partnerName={partnerName}
-          viewerSubmitted={viewerSubmitted}
-          viewerIsRequired={viewerIsRequired}
-          submitting={submitting}
-          onSubmit={onSubmit}
-        />
+        <>
+          <QuizView
+            spaceId={spaceId}
+            step={step}
+            stepIdx={stepIdx}
+            viewerUserId={viewerUserId}
+            partnerName={partnerName}
+            viewerSubmitted={viewerSubmitted}
+            viewerIsRequired={viewerIsRequired}
+            submitting={submitting}
+            onSubmit={onSubmit}
+          />
+          {chat}
+        </>
       );
   }
 }
@@ -258,6 +288,7 @@ function LlmTeachView({
 // ---------------------------------------------------------------------------
 
 function QuizView({
+  spaceId,
   step,
   stepIdx,
   viewerUserId,
@@ -267,6 +298,7 @@ function QuizView({
   submitting,
   onSubmit,
 }: {
+  spaceId: string;
   step: QuizStep;
   stepIdx: number;
   viewerUserId: string;
@@ -285,12 +317,58 @@ function QuizView({
     new Array(step.questions.length).fill(-1)
   );
 
+  // Per-question hint state. `null` = not yet requested, otherwise the
+  // last hint we received (one hint per question, button disables after).
+  const [hints, setHints] = useState<(string | null)[]>(() =>
+    new Array(step.questions.length).fill(null)
+  );
+  const [hintLoading, setHintLoading] = useState<number | null>(null);
+  const [hintError, setHintError] = useState<string | null>(null);
+
+  // Per-question feedback after submit. Populated by getQuizFeedback —
+  // server re-grades, then writes one explanation per question.
+  const [feedback, setFeedback] = useState<QuizFeedbackItem[] | null>(null);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [feedbackPending, startFeedback] = useTransition();
+
   const isTarget = step.targetUserIds.includes(viewerUserId);
   const allAnswered = answers.every((a) => a >= 0);
 
+  async function fetchHint(qi: number) {
+    if (hints[qi] !== null || hintLoading !== null) return;
+    setHintLoading(qi);
+    setHintError(null);
+    const res = await getQuizHint(spaceId, stepIdx, qi);
+    setHintLoading(null);
+    if (res.ok) {
+      setHints((prev) => {
+        const next = [...prev];
+        next[qi] = res.hint;
+        return next;
+      });
+    } else {
+      setHintError(res.error);
+    }
+  }
+
   function submit() {
     if (!allAnswered) return;
+    // Fire feedback request alongside the regular submit. The server
+    // action grades against `correctIndex` so if the client lies about
+    // its answers, the feedback list reflects the lie — but the actual
+    // mastery bump in submitStepResponse uses the same server-side
+    // `correctIndex`, so cheating gets you nothing.
     onSubmit({ kind: "quiz", answers });
+    setFeedbackError(null);
+    setFeedback(null);
+    startFeedback(async () => {
+      const res = await getQuizFeedback(spaceId, stepIdx, answers);
+      if (res.ok) {
+        setFeedback(res.feedback);
+      } else {
+        setFeedbackError(res.error);
+      }
+    });
   }
 
   return (
@@ -307,49 +385,116 @@ function QuizView({
       ) : (
         <>
           <ol className="space-y-5">
-            {step.questions.map((q, qi) => (
-              <li key={qi}>
-                <p className="text-sm font-medium text-foreground">
-                  {qi + 1}. {q.prompt}
-                </p>
-                <ul className="mt-2 space-y-1.5">
-                  {q.choices.map((choice, ci) => {
-                    const id = `q${qi}-c${ci}`;
-                    const checked = answers[qi] === ci;
-                    return (
-                      <li key={ci}>
-                        <label
-                          htmlFor={id}
-                          className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
-                            checked
-                              ? "border-foreground bg-foreground/5"
-                              : "border-border bg-background hover:bg-zinc-50"
-                          } ${viewerSubmitted ? "cursor-not-allowed opacity-70" : ""}`}
+            {step.questions.map((q, qi) => {
+              const fb = feedback?.[qi];
+              return (
+                <li key={qi}>
+                  <p className="text-sm font-medium text-foreground">
+                    {qi + 1}. {q.prompt}
+                  </p>
+                  <ul className="mt-2 space-y-1.5">
+                    {q.choices.map((choice, ci) => {
+                      const id = `q${qi}-c${ci}`;
+                      const checked = answers[qi] === ci;
+                      // Once feedback is in, mark the user's chosen
+                      // option as correct/wrong with subtle color.
+                      const showResult = viewerSubmitted && fb !== undefined;
+                      const isCorrectChoice =
+                        showResult && ci === q.correctIndex;
+                      const isWrongPick =
+                        showResult && checked && !fb!.correct;
+                      return (
+                        <li key={ci}>
+                          <label
+                            htmlFor={id}
+                            className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                              isCorrectChoice
+                                ? "border-emerald-400 bg-emerald-50"
+                                : isWrongPick
+                                  ? "border-red-400 bg-red-50"
+                                  : checked
+                                    ? "border-foreground bg-foreground/5"
+                                    : "border-border bg-background hover:bg-zinc-50"
+                            } ${viewerSubmitted ? "cursor-not-allowed opacity-90" : ""}`}
+                          >
+                            <input
+                              id={id}
+                              type="radio"
+                              name={`q${qi}`}
+                              className="accent-foreground"
+                              disabled={viewerSubmitted}
+                              checked={checked}
+                              onChange={() => {
+                                setAnswers((prev) => {
+                                  const next = [...prev];
+                                  next[qi] = ci;
+                                  return next;
+                                });
+                              }}
+                            />
+                            <span>{choice}</span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  {/* Pre-submit: hint button + (once used) the hint text.
+                      Disappears after submit because the explanation
+                      below replaces it. */}
+                  {!viewerSubmitted && (
+                    <div className="mt-2">
+                      {hints[qi] === null ? (
+                        <button
+                          type="button"
+                          onClick={() => fetchHint(qi)}
+                          disabled={hintLoading !== null}
+                          className="text-xs font-medium text-muted underline-offset-2 hover:text-foreground hover:underline disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          <input
-                            id={id}
-                            type="radio"
-                            name={`q${qi}`}
-                            className="accent-foreground"
-                            disabled={viewerSubmitted}
-                            checked={checked}
-                            onChange={() => {
-                              setAnswers((prev) => {
-                                const next = [...prev];
-                                next[qi] = ci;
-                                return next;
-                              });
-                            }}
-                          />
-                          <span>{choice}</span>
-                        </label>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </li>
-            ))}
+                          {hintLoading === qi ? "Thinking…" : "Get a hint"}
+                        </button>
+                      ) : (
+                        <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                          <span className="font-medium">Hint: </span>
+                          {hints[qi]}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Post-submit: explanation lifted from getQuizFeedback. */}
+                  {viewerSubmitted && fb && (
+                    <div
+                      className={`mt-2 rounded-md border px-3 py-2 text-xs leading-relaxed ${
+                        fb.correct
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                          : "border-red-200 bg-red-50 text-red-900"
+                      }`}
+                    >
+                      <span className="font-medium">
+                        {fb.correct ? "Correct. " : "Not quite. "}
+                      </span>
+                      {fb.explanation}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ol>
+
+          {hintError && (
+            <p className="mt-3 text-xs text-red-700">{hintError}</p>
+          )}
+
+          {viewerSubmitted && !feedback && (
+            <p className="mt-4 text-xs italic text-muted">
+              {feedbackPending
+                ? "Stitch AI is writing per-question feedback…"
+                : feedbackError
+                  ? `Couldn't load explanations: ${feedbackError}`
+                  : "Loading feedback…"}
+            </p>
+          )}
 
           <ActionBar
             onPrimary={submit}

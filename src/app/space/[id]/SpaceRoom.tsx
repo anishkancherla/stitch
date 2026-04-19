@@ -266,6 +266,7 @@ export function SpaceRoom({
       ) : step ? (
         <StepView
           key={currentStep}
+          spaceId={spaceId}
           step={step}
           stepIdx={currentStep}
           viewerUserId={viewerUserId}

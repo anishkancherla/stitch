@@ -11,6 +11,7 @@ import { RealtimeRibbonRefresher } from "@/components/RealtimeRibbonRefresher";
 import { UploadSyllabusForm } from "./UploadSyllabusForm";
 import { UploadLectureForm } from "./UploadLectureForm";
 import { CourseTabs } from "./CourseTabs";
+import { WeeklyQuizRow } from "./WeeklyQuizControls";
 import { buildGroups } from "@/lib/ribbon";
 
 type Params = { id: string };
@@ -109,6 +110,56 @@ export default async function CourseDetail({
     id: c.id,
     label: c.label,
   }));
+
+  // Weekly-quiz row data: how many subconcepts each concept has, whether
+  // a quiz exists, and attempt stats. Three small queries — fine.
+  const conceptIdList = concepts.map((c) => c.id);
+  const subCountByConcept = new Map<string, number>();
+  for (const s of subconceptRows ?? []) {
+    subCountByConcept.set(
+      s.concept_id,
+      (subCountByConcept.get(s.concept_id) ?? 0) + 1,
+    );
+  }
+
+  const { data: existingQuizRows } = conceptIdList.length > 0
+    ? await supabase
+        .from("weekly_quizzes")
+        .select("id, concept_id, questions_json")
+        .in("concept_id", conceptIdList)
+    : { data: [] as Array<{ id: string; concept_id: string; questions_json: unknown }> };
+
+  const quizByConcept = new Map<
+    string,
+    { id: string; questionCount: number }
+  >();
+  for (const q of existingQuizRows ?? []) {
+    const arr = Array.isArray(q.questions_json) ? q.questions_json : [];
+    quizByConcept.set(q.concept_id, {
+      id: q.id,
+      questionCount: arr.length,
+    });
+  }
+
+  const quizIds = Array.from(quizByConcept.values()).map((q) => q.id);
+  const { data: attemptRows } = quizIds.length > 0
+    ? await supabase
+        .from("weekly_quiz_attempts")
+        .select("quiz_id, score_pct")
+        .in("quiz_id", quizIds)
+    : { data: [] as Array<{ quiz_id: string; score_pct: number }> };
+
+  const attemptsByQuiz = new Map<
+    string,
+    { count: number; sumPct: number }
+  >();
+  for (const a of attemptRows ?? []) {
+    const acc = attemptsByQuiz.get(a.quiz_id) ?? { count: 0, sumPct: 0 };
+    acc.count += 1;
+    acc.sumPct += Number(a.score_pct ?? 0);
+    attemptsByQuiz.set(a.quiz_id, acc);
+  }
+
   const lectures = (lectureRows ?? []).map((l) => ({
     id: l.id,
     title: l.title,
@@ -257,6 +308,41 @@ export default async function CourseDetail({
             )}
           </div>
         </section>
+
+        {concepts.length > 0 && (
+          <section className="mt-10">
+            <h2 className="text-base font-medium text-foreground">
+              Weekly quizzes
+            </h2>
+            <p className="mt-1 text-xs text-muted">
+              One concept-wide quiz per week. Each one auto-spans every
+              subconcept under the concept.
+            </p>
+            <div className="mt-3 flex flex-col gap-2">
+              {concepts.map((c) => {
+                const subCount = subCountByConcept.get(c.id) ?? 0;
+                const existing = quizByConcept.get(c.id);
+                const stats = existing
+                  ? attemptsByQuiz.get(existing.id) ?? { count: 0, sumPct: 0 }
+                  : { count: 0, sumPct: 0 };
+                return (
+                  <WeeklyQuizRow
+                    key={c.id}
+                    conceptId={c.id}
+                    conceptLabel={c.label}
+                    subconceptCount={subCount}
+                    existingQuestionCount={existing?.questionCount ?? null}
+                    attempts={{
+                      count: stats.count,
+                      avgPct:
+                        stats.count > 0 ? stats.sumPct / stats.count : null,
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );

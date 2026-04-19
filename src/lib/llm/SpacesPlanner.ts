@@ -2,8 +2,8 @@ import { GoogleGenAI } from "@google/genai";
 import {
   PlannerOutput,
   PlannerStitch,
-  QuizQuestion,
 } from "../spaces";
+import { normalizeQuestions } from "./quizSchema";
 
 /**
  * Plan a Stitch Space session.
@@ -233,34 +233,6 @@ function normalizePlannerOutput(
     throw new Error("Planner returned no usable stitches");
   }
   return { stitches: out };
-}
-
-function normalizeQuestions(raw: unknown): QuizQuestion[] {
-  if (!Array.isArray(raw)) return [];
-  const out: QuizQuestion[] = [];
-  for (const q of raw) {
-    if (!q || typeof q !== "object") continue;
-    const obj = q as Record<string, unknown>;
-    const prompt = String(obj.prompt ?? "").trim();
-    const choicesRaw = obj.choices;
-    if (!prompt || !Array.isArray(choicesRaw) || choicesRaw.length !== 4) {
-      continue;
-    }
-    const choices = choicesRaw.map((c) => String(c).trim());
-    if (choices.some((c) => !c)) continue;
-    const correctIndexRaw = obj.correct_index;
-    const correctIndex =
-      typeof correctIndexRaw === "number" && Number.isInteger(correctIndexRaw)
-        ? correctIndexRaw
-        : -1;
-    if (correctIndex < 0 || correctIndex > 3) continue;
-    out.push({
-      prompt,
-      choices: [choices[0], choices[1], choices[2], choices[3]],
-      correctIndex,
-    });
-  }
-  return out;
 }
 
 function stripFences(text: string): string {

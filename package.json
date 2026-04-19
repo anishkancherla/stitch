@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "backfill:materials": "tsx scripts/backfillMaterials.ts",
+    "backfill:lectures": "tsx scripts/backfillFromLectures.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
