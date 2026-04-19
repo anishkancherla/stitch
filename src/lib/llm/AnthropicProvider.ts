@@ -1,5 +1,19 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { LLMProvider, SubconceptExtractionResult, SyllabusExtractionResult } from './LLMProvider';
+import {
+  LLMProvider,
+  SyllabusExtractionResult,
+  LectureExtractionResult,
+} from './LLMProvider';
+import {
+  extractPptxText,
+  extractDocxText,
+  extractPlainText,
+} from './officeText';
+
+const PPTX_MIME =
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 export class AnthropicProvider extends LLMProvider {
   private client: Anthropic;
@@ -19,41 +33,14 @@ export class AnthropicProvider extends LLMProvider {
     fileBase64: string,
     mimeType: string = 'application/pdf',
   ): Promise<SyllabusExtractionResult> {
-    return this.runPdfJsonExtraction<SyllabusExtractionResult>(
-      this.syllabusPrompt,
-      fileBase64,
-      mimeType,
-      1500,
-    );
-  }
-
-  async parseSubconcepts(
-    fileBase64: string,
-    mimeType: string = 'application/pdf',
-  ): Promise<SubconceptExtractionResult> {
-    const raw = await this.runPdfJsonExtraction<SubconceptExtractionResult>(
-      this.subconceptPrompt,
-      fileBase64,
-      mimeType,
-      2000,
-    );
-    return this.normalizeSubconcepts(raw);
-  }
-
-  private async runPdfJsonExtraction<T>(
-    prompt: string,
-    fileBase64: string,
-    mimeType: string,
-    maxTokens: number,
-  ): Promise<T> {
     const response = await this.client.messages.create({
       model: this.model,
-      max_tokens: maxTokens,
+      max_tokens: 1500,
       messages: [
         {
           role: 'user',
           content: [
-            { type: 'text', text: prompt },
+            { type: 'text', text: this.syllabusPrompt },
             {
               type: 'document',
               source: {
@@ -66,10 +53,7 @@ export class AnthropicProvider extends LLMProvider {
         },
         // Prefill the assistant turn so Claude continues raw JSON
         // instead of wrapping with prose or ```json fences.
-        {
-          role: 'assistant',
-          content: [{ type: 'text', text: '{' }],
-        },
+        { role: 'assistant', content: [{ type: 'text', text: '{' }] },
       ],
     } as any);
 
@@ -78,16 +62,110 @@ export class AnthropicProvider extends LLMProvider {
       throw new Error('No text returned from Anthropic API');
     }
 
-    // The prefilled '{' is not echoed back in the response, so re-prepend it
-    // when the model continued from an opened object.
     const candidate = text.trimStart().startsWith('{') ? text : `{${text}`;
     const jsonString = this.extractJsonString(candidate);
 
     try {
-      return JSON.parse(jsonString) as T;
+      return JSON.parse(jsonString) as SyllabusExtractionResult;
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown JSON parse error';
       throw new Error(`Failed to parse JSON string returned by Anthropic: ${message}\nResponse: ${text}`);
+    }
+  }
+
+  /**
+   * Parse a single lecture file into lecture-level subconcepts.
+   *
+   * Anthropic accepts PDFs natively as `document` blocks; PPTX/DOCX are not
+   * supported, so we unzip them and pass the extracted text as a plain
+   * `text` block (same fallback path as Gemini).
+   */
+  async parseLecture(file: Blob, mimeType?: string): Promise<LectureExtractionResult> {
+    const mt = mimeType || (file as File).type || 'application/octet-stream';
+    const buf = Buffer.from(await file.arrayBuffer());
+
+    type Block =
+      | { type: 'text'; text: string }
+      | {
+          type: 'document';
+          source: { type: 'base64'; media_type: string; data: string };
+        };
+    let content: Block[];
+
+    if (mt === 'application/pdf') {
+      content = [
+        {
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: mt,
+            data: buf.toString('base64'),
+          },
+        },
+        { type: 'text', text: this.lecturePrompt },
+      ];
+    } else if (mt === PPTX_MIME) {
+      const text = await extractPptxText(buf);
+      content = [
+        {
+          type: 'text',
+          text:
+            this.lecturePrompt +
+            '\n\nLecture slides (extracted text, slide-by-slide):\n\n' +
+            text,
+        },
+      ];
+    } else if (mt === DOCX_MIME) {
+      const text = await extractDocxText(buf);
+      content = [
+        {
+          type: 'text',
+          text:
+            this.lecturePrompt +
+            '\n\nLecture document (extracted text):\n\n' +
+            text,
+        },
+      ];
+    } else if (mt.startsWith('text/')) {
+      const text = extractPlainText(buf);
+      content = [
+        {
+          type: 'text',
+          text:
+            this.lecturePrompt + '\n\nLecture document (text):\n\n' + text,
+        },
+      ];
+    } else {
+      throw new Error(`Unsupported lecture MIME type: ${mt}`);
+    }
+
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 2000,
+      messages: [
+        { role: 'user', content },
+        { role: 'assistant', content: [{ type: 'text', text: '{' }] },
+      ],
+    } as any);
+
+    const text = this.extractTextFromResponse(response);
+    if (!text) {
+      throw new Error('No text returned from Anthropic API');
+    }
+    const candidate = text.trimStart().startsWith('{') ? text : `{${text}`;
+    const jsonString = this.extractJsonString(candidate);
+
+    try {
+      const parsed = JSON.parse(jsonString) as LectureExtractionResult;
+      if (!Array.isArray(parsed.subconcepts)) {
+        throw new Error('Response missing `subconcepts` array.');
+      }
+      return this.normalizeLectureResult(parsed);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown JSON parse error';
+      throw new Error(
+        `Failed to parse JSON string returned by Anthropic: ${message}\nResponse: ${text}`,
+      );
     }
   }
 

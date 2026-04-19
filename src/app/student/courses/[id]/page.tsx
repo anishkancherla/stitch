@@ -1,15 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
-import { Heatmap } from "@/components/Heatmap";
+import { Ribbon } from "@/components/Ribbon";
 import { createClient } from "@/lib/supabase/server";
 import { signOut } from "@/app/(auth)/actions";
-import {
-  buildCells,
-  type HeatmapConcept,
-  type HeatmapLecture,
-} from "@/lib/heatmap";
+import { buildGroups } from "@/lib/ribbon";
 import { MasteryControls } from "./MasteryControls";
+import { RealtimeRibbonRefresher } from "@/components/RealtimeRibbonRefresher";
 
 type Params = { id: string };
 
@@ -60,33 +57,35 @@ export default async function StudentCourseDetail({
       .eq("user_id", user!.id),
   ]);
 
-  const concepts: HeatmapConcept[] = (conceptRows ?? []).map((c) => ({
+  const concepts = (conceptRows ?? []).map((c) => ({
     id: c.id,
     label: c.label,
   }));
-  const lectures: HeatmapLecture[] = (lectureRows ?? []).map((l, i) => ({
+  const lectures = (lectureRows ?? []).map((l) => ({
     id: l.id,
-    label: `L${i + 1}`,
     title: l.title,
+    // Sort key for chronological ordering within a concept group. Fall back
+    // to created_at when started_at is missing.
+    orderKey: l.started_at ?? l.created_at ?? "",
   }));
   const masteryById = new Map<string, number>(
     (masteryRows ?? []).map((m) => [m.subconcept_id, m.score])
   );
-  const cells = buildCells(
+  const groups = buildGroups(
     concepts,
-    lectures,
     (subconceptRows ?? []).map((s) => ({
       id: s.id,
       label: s.label,
       concept_id: s.concept_id,
       lecture_id: s.lecture_id,
     })),
+    lectures,
     (sid) => masteryById.get(sid) ?? null
   );
 
   // Pre-render the +/- buttons per subconcept so we can pass them across the
   // server→client boundary as JSX (functions aren't serializable, JSX is).
-  const subconceptActions: Record<string, React.ReactNode> = Object.fromEntries(
+  const cellActions: Record<string, React.ReactNode> = Object.fromEntries(
     (subconceptRows ?? []).map((s) => [
       s.id,
       <MasteryControls
@@ -99,6 +98,7 @@ export default async function StudentCourseDetail({
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
+      <RealtimeRibbonRefresher scopeId={`student-${course.id}-${user!.id}`} />
       <TopBar
         right={
           <div className="flex items-center gap-2">
@@ -140,26 +140,24 @@ export default async function StudentCourseDetail({
         <section className="mt-12">
           <div className="flex items-baseline justify-between">
             <h2 className="text-base font-medium text-foreground">
-              Your mastery
+              Your ribbon
             </h2>
             <p className="text-xs text-muted">
               Click any cell for the subconcept breakdown.
             </p>
           </div>
           <div className="mt-3">
-            <Heatmap
-              concepts={concepts}
-              lectures={lectures}
-              cells={cells}
-              subconceptActions={subconceptActions}
+            <Ribbon
+              groups={groups}
+              cellActions={cellActions}
+              caption="Your mastery"
               emptyState={
                 <>
                   <p className="text-sm text-muted">
-                    Your professor hasn&apos;t added any concepts or lectures
-                    yet.
+                    Your professor hasn&apos;t added any lectures yet.
                   </p>
                   <p className="mt-1 text-sm text-muted">
-                    Once they do, your personal mastery heatmap renders here.
+                    Once they do, your personal ribbon renders here.
                   </p>
                 </>
               }
