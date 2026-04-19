@@ -73,7 +73,7 @@ export class GeminiProvider extends LLMProvider {
    *     and feed that as a plain text prompt instead.
    *   - text/* → just decoded as UTF-8.
    *
-   * Image content from PPTX is dropped — for a 5-10 subconcept extraction
+   * Image content from PPTX is dropped — for a 3-5 subconcept extraction
    * task the slide text is plenty.
    */
   async parseLecture(file: Blob, mimeType?: string): Promise<LectureExtractionResult> {

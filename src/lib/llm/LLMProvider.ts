@@ -16,13 +16,11 @@ export interface SyllabusExtractionResult {
  * under (parent concept × this lecture).
  */
 export interface LectureSubconcept {
-  label: string;
-  description?: string;
+  subconcept: string;
 }
 
 export interface LectureExtractionResult {
-  /** Optional best guess at the lecture's overall topic, for UI display only. */
-  topic?: string;
+  // we don't need topic because professor will upload under the overarching concept
   subconcepts: LectureSubconcept[];
 }
 
@@ -48,40 +46,69 @@ Rules:
 
   protected readonly lecturePrompt: string = `
 You are analyzing a single university lecture (slides or notes). Extract the
-LECTURE-LEVEL subconcepts that students need to master after this lecture.
+OVERARCHING subconcepts that students need to master after this lecture.
 
-HARD CONSTRAINT: Return AT MOST 10 subconcepts. Never more than 10.
-Target 5-8 entries. If your initial list has more than 10, you MUST iteratively
-merge the most closely related ones under a broader umbrella label until
-10 or fewer remain. Do not return 11+ under any circumstance.
+# HARD CONSTRAINT
+Return AT MOST 5 subconcepts. Never more than 5. Target 3-5 entries.
+Returning 6 or more is a failure. Returning narrow / overlapping topics is a
+failure even if you stay under 5.
 
-Return JSON matching this schema exactly without any markdown wrappers:
+# THINK BEFORE YOU ANSWER
+Before writing the JSON, internally do this:
+  1. List every topic you see in the lecture.
+  2. For each pair of topics, ask: "Are these two variations or instances of
+     the same broader idea?" If yes, MERGE them under the broader idea.
+  3. Repeat step 2 until no two remaining topics could be merged.
+  4. If you still have more than 5, keep merging the two most related ones.
+
+# GROUPING RULES (do not violate)
+A subconcept must be a TOP-LEVEL section heading you would put on a syllabus,
+NOT a slide title or sub-bullet. Variations, special cases, sub-techniques,
+and individual examples MUST live inside a broader umbrella label.
+
+Concrete merges that are MANDATORY when the corresponding pieces appear:
+  * Big-O, Omega (Ω), Theta (Θ), little-o, little-omega, "comparing functions
+    using limits", "common growth rates" -> ONE entry "Asymptotic Notation"
+  * "RAM model", "counting operations", "time complexity intro",
+    "asymptotic motivation", "practical analysis" -> ONE entry
+    "Algorithm Analysis Basics"
+  * Substitution method, recursion tree, Master Theorem -> ONE entry
+    "Recurrence Solving"
+  * Insertion sort, merge sort, quicksort, heapsort -> ONE entry
+    "Sorting Algorithms"
+  * BFS, DFS, Dijkstra, Bellman-Ford -> ONE entry "Graph Traversal" (or
+    "Shortest Paths" if that's the lecture's framing)
+
+# WHAT IS A FAILURE
+BAD output (too granular — these are all the same umbrella):
+  ["Big-O Notation", "Omega Notation", "Theta Notation",
+   "Little-o and Little-omega Notation", "Comparing Functions Using Limits",
+   "Common Growth Rate Classes", "Algebraic Rules for Asymptotic Notation"]
+GOOD output for the SAME lecture:
+  ["Algorithm Analysis Basics", "Asymptotic Notation",
+   "Comparing Growth Rates", "Common Complexity Classes"]
+
+# OUTPUT SCHEMA
+Return JSON matching this schema exactly, with no markdown wrappers:
 {
   "topic": "Short title for the whole lecture (optional).",
   "subconcepts": [
-    { "label": "Big-O Notation", "description": "One sentence on what students should be able to do." }
+    { "label": "Asymptotic Notation", "description": "One sentence on what students should be able to do." }
   ]
 }
 
-Rules:
-- Each label is a short noun phrase, roughly 2-6 words, in Title Case.
-- A subconcept must represent a SECTION of the lecture (multiple slides or a
-  whole module), not a single slide, example, or definition.
-- Aggressively GROUP related variants under one umbrella label. Examples:
-    * Big-O, Omega, Theta, little-o, little-omega -> "Asymptotic Notation"
-    * Substitution method, recursion tree, Master Theorem -> "Recurrence Solving"
-    * Insertion sort, merge sort, quicksort details -> "Sorting Algorithms"
-- DO NOT list individual algorithms, theorems, proof techniques, or examples
-  as their own subconcepts. They belong inside a broader label.
-  GOOD: "Big-O Notation", "Analyzing Loops", "Space Complexity"
-  BAD:  "Constant Time", "Linear Time", "Log N Examples", "Comparing Fractions"
-- Description is a single sentence summarizing what the student should be able
-  to do after this section.
-- Exclude administrative content (course logistics, syllabus recap, agenda
-  slides, "next week" preview, summary, Q&A, references).
+# OTHER RULES
+- Labels: 2-5 words, Title Case, noun phrases.
+- Description: one sentence on what the student should be able to do across
+  the entire umbrella (cover all merged sub-topics).
+- Exclude administrative content (logistics, syllabus recap, agenda, "next
+  week" preview, summary, Q&A, references).
 - Entries must be unique. Order them in the order they appear in the lecture.
 
-FINAL CHECK before returning: count the entries. If count > 10, merge again.
+# FINAL CHECK (do this before returning)
+Count entries. If > 5, merge until <= 5.
+Re-read each label. If any two could plausibly live under one broader heading,
+merge them. Only then return.
 `;
 
   constructor(name: string) {
@@ -113,7 +140,7 @@ FINAL CHECK before returning: count the entries. If count > 10, merge again.
    */
   protected normalizeLectureResult(
     result: LectureExtractionResult,
-    max = 10,
+    max = 5,
   ): LectureExtractionResult {
     const seen = new Set<string>();
     const deduped: LectureSubconcept[] = [];
