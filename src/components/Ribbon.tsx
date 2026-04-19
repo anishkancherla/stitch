@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   cellColorClass,
   cellHex,
@@ -38,12 +38,36 @@ function fmt(v: number): string {
   return v.toFixed(2);
 }
 
-// How many "flex units" the expanded concept claims relative to a collapsed
-// peer. With 4 concepts and EXPAND=4, the expanded one takes 4/(4+3)=~57%
-// of the bar; with 8, it takes 4/(4+7)=~36%. Keeps the rest readable.
-const EXPAND_GROW = 4;
+// Layout sizing.
+//
+// Concepts now use *fixed pixel widths* instead of flex-grow, so labels
+// always render at a readable size and the ribbon is allowed to overflow
+// the viewport horizontally (with a scrollbar). The previous flex-grow
+// model was crushing labels like "Recursion and Divide-and-Conquer" into
+// 60px columns where they truncated to "RECURSIO…".
+//
+// COLLAPSED_W_PX is comfortable for the longest concept names in CS 161
+// (allows two short lines of wrapping when needed). EXPANDED_PER_SUB_PX
+// is per-subconcept so an expanded concept grows to fit its kids; the
+// min/max clamp keeps tiny concepts from being awkwardly small and big
+// ones from blowing past a comfortable click target.
+const COLLAPSED_W_PX = 150;
+const EXPANDED_PER_SUB_PX = 95;
+const EXPANDED_MIN_W_PX = 400;
+const EXPANDED_MAX_W_PX = 800;
+// Gap between adjacent chunks (before / expanded / after) when something
+// is expanded. Read as: this is how much breathing room the expanded
+// concept gets from its neighbours so it visually pops out instead of
+// looking like one continuous bar.
+const CHUNK_GAP_PX = 16;
 const EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
 const ANIM_MS = 400;
+
+function widthFor(g: RibbonGroup, isExpanded: boolean): number {
+  if (!isExpanded) return COLLAPSED_W_PX;
+  const target = g.cells.length * EXPANDED_PER_SUB_PX;
+  return Math.min(EXPANDED_MAX_W_PX, Math.max(EXPANDED_MIN_W_PX, target));
+}
 
 export function Ribbon({
   groups,
@@ -156,54 +180,16 @@ export function Ribbon({
           </div>
         )}
 
-        {/* Concept labels — stretched in lockstep with the bar segments below
-            so they stay aligned through expand/collapse. */}
-        <div className="flex w-full items-end gap-0">
-          {groups.map((g) => {
-            const isExpanded = g.conceptId === expandedId;
-            return (
-              <div
-                key={g.conceptId}
-                style={{
-                  flexGrow: isExpanded ? EXPAND_GROW : 1,
-                  flexBasis: 0,
-                  transition: `flex-grow ${ANIM_MS}ms ${EASE}`,
-                }}
-                className="min-w-0 px-2"
-              >
-                <div
-                  className={[
-                    "truncate text-center text-[10px] font-medium uppercase tracking-wider",
-                    isExpanded ? "text-foreground" : "text-muted",
-                  ].join(" ")}
-                  title={g.conceptLabel}
-                >
-                  {g.conceptLabel}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* The bar. SVG turbulence filter + overflow-hidden so the inner
-            sub-bars don't bleed past the rounded ends. */}
-        <div
-          className="mt-1.5 flex h-12 w-full overflow-hidden rounded-md ring-1 ring-border/50"
-          style={{ filter: `url(#${filterId})` }}
-        >
-          {groups.map((g, i) => (
-            <ConceptSegment
-              key={g.conceptId}
-              group={g}
-              isFirst={i === 0}
-              isExpanded={g.conceptId === expandedId}
-              expandGrow={EXPAND_GROW}
-              onToggle={() => toggleConcept(g.conceptId)}
-              selectedSubId={selectedSubId}
-              onSelectSub={(id) => setSelectedSubId(id === selectedSubId ? null : id)}
-            />
-          ))}
-        </div>
+        <RibbonScrollSurface
+          groups={groups}
+          expandedId={expandedId}
+          selectedSubId={selectedSubId}
+          filterId={filterId}
+          onToggle={toggleConcept}
+          onSelectSub={(id) =>
+            setSelectedSubId(id === selectedSubId ? null : id)
+          }
+        />
 
         {/* Legend */}
         <div className="mt-4 flex items-center gap-3 text-[11px] text-muted">
@@ -269,31 +255,191 @@ export function Ribbon({
 }
 
 // ---------------------------------------------------------------------------
-// One concept segment: aggregate-color background that fades out as the
-// per-subconcept sub-bars fade in on expand. Both layers are absolutely
-// positioned so the segment's own width animates without a layout reflow
-// under the bars.
+// Scroll surface + flat single-row layout
+//
+// The ribbon is horizontally scrollable. We render labels and bar pieces
+// as ONE flat row each (not chunked DOM), so every column is a stable
+// React node and width / margin / transform transitions actually play
+// instead of snapping. When a concept expands:
+//
+//   - its column's width animates from COLLAPSED_W_PX → expanded width
+//   - it gains marginLeft/marginRight = CHUNK_GAP_PX, which animates
+//     neighbours apart so the expanded section visually pops out of the
+//     strip rather than just stretching in place
+//   - its bar piece lifts (translateY) and gets a soft drop-shadow,
+//     reinforcing the "this just rose up to be inspected" feel
+//
+// We also scroll-into-view-center the expanded column so the user never
+// has to pan to find it, even when they clicked a far-edge concept.
 // ---------------------------------------------------------------------------
 
-interface ConceptSegmentProps {
+interface RibbonScrollSurfaceProps {
+  groups: RibbonGroup[];
+  expandedId: string | null;
+  selectedSubId: string | null;
+  filterId: string;
+  onToggle: (id: string) => void;
+  onSelectSub: (id: string) => void;
+}
+
+type ColumnLayout = {
   group: RibbonGroup;
-  isFirst: boolean;
   isExpanded: boolean;
-  expandGrow: number;
+  /** Pixel width of this column at the current state. */
+  width: number;
+  /** Gap on the left side — non-zero only on the expanded column when it
+   *  has a left neighbour, so the gap "belongs to" the popped-out
+   *  section and doesn't double up across siblings. */
+  marginLeft: number;
+  /** Mirror of marginLeft for the right side. */
+  marginRight: number;
+  /** True for the very first column overall. Suppresses the inter-column
+   *  divider on its left edge. */
+  isFirstOverall: boolean;
+  /** True if the LEFT edge of this column should look like a chunk
+   *  boundary (rounded corner, no divider). Either the column is
+   *  expanded, the previous column is expanded, or this is the first
+   *  column overall. */
+  isLeftBoundary: boolean;
+  /** Mirror of isLeftBoundary for the right edge. */
+  isRightBoundary: boolean;
+};
+
+function RibbonScrollSurface({
+  groups,
+  expandedId,
+  selectedSubId,
+  filterId,
+  onToggle,
+  onSelectSub,
+}: RibbonScrollSurfaceProps) {
+  // Build column descriptors once and share them between the labels row
+  // and the bar row, so the two rows can never drift out of alignment.
+  const columns: ColumnLayout[] = groups.map((g, i) => {
+    const isExp = g.conceptId === expandedId;
+    const prevExp =
+      i > 0 && groups[i - 1].conceptId === expandedId;
+    const nextExp =
+      i < groups.length - 1 && groups[i + 1].conceptId === expandedId;
+    return {
+      group: g,
+      isExpanded: isExp,
+      width: widthFor(g, isExp),
+      marginLeft: isExp && i > 0 ? CHUNK_GAP_PX : 0,
+      marginRight: isExp && i < groups.length - 1 ? CHUNK_GAP_PX : 0,
+      isFirstOverall: i === 0,
+      isLeftBoundary: isExp || prevExp || i === 0,
+      isRightBoundary: isExp || nextExp || i === groups.length - 1,
+    };
+  });
+
+  const expandedRef = useRef<HTMLDivElement | null>(null);
+  // Centre the expanded column in the scroll viewport whenever it
+  // changes. `inline: 'center'` is the magic — the default `nearest`
+  // won't move the viewport if any part of the element is already
+  // visible, which feels broken when you click a concept whose left
+  // edge is on screen but whose subconcepts unfurl off the right edge.
+  useEffect(() => {
+    if (expandedId && expandedRef.current) {
+      expandedRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "center",
+      });
+    }
+  }, [expandedId]);
+
+  return (
+    // -mx-4 / px-4 trick: lets the scrollbar sit flush with the card
+    // edge while keeping the contents visually inset by the card padding.
+    // pt-2 / pb-3 leave room for the lift transform + shadow without the
+    // card clipping them.
+    <div className="-mx-4 overflow-x-auto px-4 pb-3 pt-2">
+      <div className="inline-block min-w-full">
+        {/* Labels row. break-words + leading-tight let long concept
+            names wrap onto two lines instead of truncating — fixes the
+            original "RECURSIO…" bug. Each label uses the same width and
+            margin transitions as its bar piece below, so they slide
+            together as the expanded column grows. */}
+        <div className="flex items-end">
+          {columns.map((col) => (
+            <div
+              key={col.group.conceptId}
+              style={{
+                width: `${col.width}px`,
+                marginLeft: `${col.marginLeft}px`,
+                marginRight: `${col.marginRight}px`,
+                transition: `width ${ANIM_MS}ms ${EASE}, margin ${ANIM_MS}ms ${EASE}, transform ${ANIM_MS}ms ${EASE}`,
+                transform: col.isExpanded ? "translateY(-2px)" : "translateY(0)",
+              }}
+              className="shrink-0 px-2"
+            >
+              <div
+                className={[
+                  "text-center text-[11px] font-medium uppercase tracking-wider leading-tight break-words",
+                  col.isExpanded ? "text-foreground" : "text-muted",
+                ].join(" ")}
+                title={col.group.conceptLabel}
+              >
+                {col.group.conceptLabel}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Bar row. The SVG turbulence filter is applied at the row
+            level so the noise pattern stays continuous across all
+            columns (applying per-segment would create visible seams
+            between adjacent collapsed pieces). Individual ConceptColumn
+            components own their backgrounds, rounded corners, and the
+            lift/shadow when expanded. */}
+        <div
+          className="mt-2 flex items-stretch"
+          style={{ filter: `url(#${filterId})` }}
+        >
+          {columns.map((col) => (
+            <ConceptColumn
+              key={col.group.conceptId}
+              column={col}
+              innerRef={col.isExpanded ? expandedRef : undefined}
+              selectedSubId={selectedSubId}
+              onToggle={() => onToggle(col.group.conceptId)}
+              onSelectSub={onSelectSub}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// One concept column: aggregate-color background that fades out as the
+// per-subconcept sub-bars fade in on expand. Both layers are absolutely
+// positioned inside an h-12 box so the column's own width animates
+// without reflowing the layers under the bars.
+//
+// Chunk-edge rounding + the lift transform are driven by the parent
+// surface via the ColumnLayout descriptor — this component just renders
+// what it's told.
+// ---------------------------------------------------------------------------
+
+interface ConceptColumnProps {
+  column: ColumnLayout;
+  innerRef?: React.RefObject<HTMLDivElement | null>;
   onToggle: () => void;
   selectedSubId: string | null;
   onSelectSub: (id: string) => void;
 }
 
-function ConceptSegment({
-  group,
-  isFirst,
-  isExpanded,
-  expandGrow,
+function ConceptColumn({
+  column,
+  innerRef,
   onToggle,
   selectedSubId,
   onSelectSub,
-}: ConceptSegmentProps) {
+}: ConceptColumnProps) {
+  const { group, isExpanded, width, marginLeft, marginRight } = column;
   const aggregate = conceptAggregate(group);
   const aggregateHex = cellHex(aggregate);
   const isEmpty = group.cells.length === 0;
@@ -303,19 +449,45 @@ function ConceptSegment({
     ? "no signal yet"
     : `aggregate ${fmt(aggregate)}`;
 
+  // Inter-column divider: only show on the LEFT edge when this column
+  // sits flush against another collapsed sibling (i.e. it isn't a chunk
+  // boundary). At a chunk boundary we want a clean rounded edge instead.
+  const showLeftDivider = !column.isLeftBoundary && !column.isFirstOverall;
+
   return (
     <div
+      ref={innerRef}
       style={{
-        flexGrow: isExpanded ? expandGrow : 1,
-        flexBasis: 0,
-        transition: `flex-grow ${ANIM_MS}ms ${EASE}`,
+        width: `${width}px`,
+        marginLeft: `${marginLeft}px`,
+        marginRight: `${marginRight}px`,
+        // Lift the expanded column slightly so it visually rises out
+        // of the strip. translateY + drop-shadow + a near-imperceptible
+        // scale together read as "this just lifted off the page".
+        transform: isExpanded
+          ? "translateY(-3px) scale(1.005)"
+          : "translateY(0) scale(1)",
+        // Drop-shadow as a CSS filter (instead of box-shadow) so it
+        // lives in the same filter chain as the parent's SVG turbulence
+        // and renders cleanly underneath the column's rounded corners.
+        filter: isExpanded
+          ? "drop-shadow(0 8px 16px rgba(0,0,0,0.12)) drop-shadow(0 2px 4px rgba(0,0,0,0.06))"
+          : "none",
+        transition: `width ${ANIM_MS}ms ${EASE}, margin ${ANIM_MS}ms ${EASE}, transform ${ANIM_MS}ms ${EASE}, filter ${ANIM_MS}ms ${EASE}`,
+        // willChange hint keeps the transform on the GPU compositor
+        // layer so the lift doesn't repaint the noise filter every
+        // frame — noticeable smoothness win on lower-end machines.
+        willChange: "width, margin, transform, filter",
       }}
       className={[
-        "relative h-full min-w-0",
-        // 1px concept divider — left border on every segment except the
-        // first. The fabric filter modulates it slightly, so it blends
-        // into the weave instead of looking pasted on.
-        isFirst ? "" : "border-l border-black/15",
+        "relative h-12 shrink-0 overflow-hidden",
+        column.isLeftBoundary ? "rounded-l-md" : "",
+        column.isRightBoundary ? "rounded-r-md" : "",
+        // The 1px concept divider becomes part of the segment's own
+        // left border, so adjacent collapsed columns share a clean
+        // hairline. The fabric filter modulates it slightly so it
+        // blends into the weave instead of looking pasted on.
+        showLeftDivider ? "border-l border-black/15" : "",
       ].join(" ")}
     >
       {/* Aggregate colour layer — visible when collapsed, fades on expand.

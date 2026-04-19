@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { Ribbon } from "@/components/Ribbon";
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import { signOut } from "@/app/(auth)/actions";
 import { PublishButton } from "./PublishButton";
 import { DeleteButton } from "./DeleteButton";
@@ -70,13 +71,21 @@ export default async function CourseDetail({
   const subIds = (subconceptRows ?? []).map((s) => s.id);
   // Pull every enrolled student's mastery for these subconcepts. RLS allows
   // this for the course owner via usm_prof_read.
-  const { data: allMastery } =
-    subIds.length > 0
-      ? await supabase
+  // Paginated through fetchAllRows because Supabase hosted PostgREST
+  // caps API responses at 1000 rows by default (and `.range(0, 99999)`
+  // doesn't bypass it on the hosted tier). For class aggregates we need
+  // *every* (student, subconcept) row — a midsize class (52 × 24 = 1248)
+  // already exceeds the default, and the silent truncation skews the
+  // heatmap toward whichever students happened to be inserted first.
+  const { rows: allMastery } = subIds.length > 0
+    ? await fetchAllRows<{ subconcept_id: string; score: number }>((from, to) =>
+        supabase
           .from("user_subconcept_mastery")
           .select("subconcept_id, score")
           .in("subconcept_id", subIds)
-      : { data: [] as Array<{ subconcept_id: string; score: number }> };
+          .range(from, to)
+      )
+    : { rows: [] as Array<{ subconcept_id: string; score: number }> };
 
   // Aggregate per subconcept first (so averaging the cell averages the right
   // population, not double-weighted toward dense cells).

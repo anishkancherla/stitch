@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import {
   rankMatches,
   focusMastery,
@@ -131,14 +132,26 @@ export async function getMatchesForConcept(
     return { ok: true, matches: [], myFocusMastery: 0, alreadyStrong: false };
   }
 
-  // Pull mastery for everyone in one shot — requester + classmates, scoped
-  // to this course's subconcepts.
-  const { data: masteryRows, error: mErr } = await admin
-    .from("user_subconcept_mastery")
-    .select("user_id, subconcept_id, score")
-    .in("user_id", [user.id, ...classmateIds])
-    .in("subconcept_id", subIds);
-  if (mErr) return { ok: false, error: mErr.message };
+  // Pull mastery for everyone — requester + classmates, scoped to this
+  // course's subconcepts. Paginated through fetchAllRows because Supabase
+  // hosted PostgREST caps API responses at 1000 rows by default and a
+  // class of N students × M subconcepts blows past that quickly
+  // (52 × 24 = 1248). The cap was silently dropping trailing rows —
+  // which manifested as "the requester has 0.5 mastery on everything"
+  // because their own rows fell off the tail of the response.
+  const { rows: masteryRows, error: mErr } = await fetchAllRows<{
+    user_id: string;
+    subconcept_id: string;
+    score: number;
+  }>((from, to) =>
+    admin
+      .from("user_subconcept_mastery")
+      .select("user_id, subconcept_id, score")
+      .in("user_id", [user.id, ...classmateIds])
+      .in("subconcept_id", subIds)
+      .range(from, to)
+  );
+  if (mErr) return { ok: false, error: mErr };
 
   // Names for the classmates — public.users is RLS-locked to self, so we
   // need admin here too. Avatar columns aren't in the schema yet, so the
@@ -160,12 +173,9 @@ export async function getMatchesForConcept(
   const myMastery = new Map<string, number>();
   const classmatesMap = new Map<string, Map<string, number>>();
   for (const cid of classmateIds) classmatesMap.set(cid, new Map());
-  for (const row of masteryRows ?? []) {
-    const uid = row.user_id as string;
-    const sid = row.subconcept_id as string;
-    const score = row.score as number;
-    if (uid === user.id) myMastery.set(sid, score);
-    else classmatesMap.get(uid)?.set(sid, score);
+  for (const row of masteryRows) {
+    if (row.user_id === user.id) myMastery.set(row.subconcept_id, row.score);
+    else classmatesMap.get(row.user_id)?.set(row.subconcept_id, row.score);
   }
 
   // Compute the requester's mastery on the focused cell first. If they're
@@ -182,22 +192,32 @@ export async function getMatchesForConcept(
 
   // Availability for everyone (requester + classmates) in a single pass.
   // RLS allows cross-read because all parties share at least this course.
-  const { data: availRows, error: aErr } = await admin
-    .from("user_availability")
-    .select("user_id, day_of_week, start_time, end_time")
-    .in("user_id", [user.id, ...classmateIds]);
-  if (aErr) return { ok: false, error: aErr.message };
+  // Paginated for the same reason as the mastery query above — a class
+  // where most students have filled out a few weekly blocks can easily
+  // exceed 1000 rows.
+  const { rows: availRows, error: aErr } = await fetchAllRows<{
+    user_id: string;
+    day_of_week: number;
+    start_time: string;
+    end_time: string;
+  }>((from, to) =>
+    admin
+      .from("user_availability")
+      .select("user_id, day_of_week, start_time, end_time")
+      .in("user_id", [user.id, ...classmateIds])
+      .range(from, to)
+  );
+  if (aErr) return { ok: false, error: aErr };
 
   const availByUser = new Map<string, AvailabilityBlock[]>();
-  for (const row of availRows ?? []) {
-    const uid = row.user_id as string;
+  for (const row of availRows) {
     const block = dbBlockToBlock({
-      day_of_week: row.day_of_week as number,
-      start_time: row.start_time as string,
-      end_time: row.end_time as string,
+      day_of_week: row.day_of_week,
+      start_time: row.start_time,
+      end_time: row.end_time,
     });
-    if (!availByUser.has(uid)) availByUser.set(uid, []);
-    availByUser.get(uid)!.push(block);
+    if (!availByUser.has(row.user_id)) availByUser.set(row.user_id, []);
+    availByUser.get(row.user_id)!.push(block);
   }
   const myAvailability = availByUser.get(user.id) ?? [];
 

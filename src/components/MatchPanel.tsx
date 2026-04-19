@@ -154,6 +154,8 @@ export function MatchPanel({
                 match={m}
                 rank={idx + 1}
                 courseId={courseId}
+                conceptId={conceptId}
+                subconceptId={subconceptId}
                 focusedTopic={subconceptLabel || conceptLabel}
               />
             ))}
@@ -186,11 +188,17 @@ function MatchCard({
   match,
   rank,
   courseId,
+  conceptId,
+  subconceptId,
   focusedTopic,
 }: {
   match: MatchResult;
   rank: number;
   courseId: string;
+  /** Click-context — passed to the Start button so the generated space is
+   *  scoped to the cell the requester focused on, not pair-wide. */
+  conceptId: string;
+  subconceptId: string | null;
   /** Label of the cell the student clicked (subconcept if drilled in,
    *  otherwise the concept). Used as the "they teach you" topic. */
   focusedTopic: string;
@@ -216,6 +224,8 @@ function MatchCard({
         <StartSpaceButton
           courseId={courseId}
           partnerUserId={match.userId}
+          conceptId={conceptId}
+          subconceptId={subconceptId}
         />
       </div>
 
@@ -369,14 +379,22 @@ function bucketLabel(score: number): SwapLevel {
 function StartSpaceButton({
   courseId,
   partnerUserId,
+  conceptId,
+  subconceptId,
 }: {
   courseId: string;
   partnerUserId: string;
+  /** Forwarded to the server action so the session is scoped to the
+   *  clicked cell instead of every pair-wide weak subconcept. */
+  conceptId: string;
+  subconceptId: string | null;
 }) {
   return (
     <form action={startStitchSpaceForm} className="shrink-0">
       <input type="hidden" name="courseId" value={courseId} />
       <input type="hidden" name="partnerUserId" value={partnerUserId} />
+      <input type="hidden" name="conceptId" value={conceptId} />
+      <input type="hidden" name="subconceptId" value={subconceptId ?? ""} />
       <SpaceSubmitButton />
     </form>
   );

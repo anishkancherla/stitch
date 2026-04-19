@@ -38,7 +38,19 @@ export type CreateSpaceResult =
 
 export async function createStitchSpace(
   courseId: string,
-  partnerUserId: string
+  partnerUserId: string,
+  // Click-context: which cell the requester focused on the ribbon when
+  // they hit "Start Stitch Space". Optional so legacy callers (and any
+  // future "general" entry point) still work — when both are null we
+  // fall back to a pair-wide session over every weak subconcept.
+  //
+  // Both are passed through from MatchPanel (the only current caller).
+  // Scoping the session to the click means students who drilled into
+  // "Merge Sort" don't end up in a 6-stitch session on Linked Lists,
+  // and the stitches they DO see lead with their own gaps instead of
+  // their partner's.
+  focusConceptId: string | null = null,
+  focusSubconceptId: string | null = null
 ): Promise<CreateSpaceResult> {
   const supabase = await createClient();
   const {
@@ -118,7 +130,15 @@ export async function createStitchSpace(
   // Identify weak subconcepts. A subconcept is "weak" if EITHER student has
   // mastery < WEAK_THRESHOLD on it. The planner decides per-stitch who
   // teaches (if exactly one is weak) vs LLM-teach (if both are).
-  const weakItems: PlannerWeakItem[] = [];
+  //
+  // Each item also carries the raw mastery numbers so the scope filter +
+  // sort below can prefer the requester's gaps over the partner's.
+  type ScoredWeakItem = PlannerWeakItem & {
+    mine: number;
+    theirs: number;
+    conceptId: string;
+  };
+  const weakItems: ScoredWeakItem[] = [];
   for (const s of subconcepts) {
     const mineRaw = masteryByUser.get(user.id)!.get(s.id);
     const theirsRaw = masteryByUser.get(partnerUserId)!.get(s.id);
@@ -130,6 +150,9 @@ export async function createStitchSpace(
         subconceptLabel: s.label,
         conceptLabel: s.conceptLabel,
         masteryByUser: { [user.id]: mine, [partnerUserId]: theirs },
+        mine,
+        theirs,
+        conceptId: s.conceptId,
       });
     }
   }
@@ -140,10 +163,60 @@ export async function createStitchSpace(
     };
   }
 
+  // ---- Scope to the focused cell (Fix A) ----------------------------------
+  //
+  // The MatchPanel passes whichever cell the student clicked. We use it to
+  // restrict the session so a click on "Merge Sort" doesn't produce a
+  // session about "Singly Linked Lists." Three cases:
+  //
+  //   subconcept click → pin that subconcept, then up to 2 more weak
+  //                      siblings under the same concept (so the session
+  //                      isn't a 1-stitch flash).
+  //   concept click    → only weak subconcepts under that concept.
+  //   no scope         → legacy behavior, every pair-wide weak item.
+  //
+  // After scoping we sort with the requester's gaps first so the planner
+  // builds a session that pays the requester back for clicking, not one
+  // that's mostly about teaching their partner (Fix B).
+
+  let scoped: ScoredWeakItem[];
+  if (focusSubconceptId) {
+    const pinned = weakItems.find(
+      (w) => w.subconceptId === focusSubconceptId
+    );
+    const sameConcept = weakItems.filter(
+      (w) =>
+        w.subconceptId !== focusSubconceptId &&
+        (focusConceptId
+          ? w.conceptId === focusConceptId
+          : pinned !== undefined && w.conceptId === pinned.conceptId)
+    );
+    if (pinned) {
+      scoped = [pinned, ...sortRequesterFirst(sameConcept)].slice(0, 3);
+    } else if (sameConcept.length > 0) {
+      // Shouldn't happen normally — the requester clicked a strong cell
+      // and matching gated the panel. Defensive fall-through.
+      scoped = sortRequesterFirst(sameConcept).slice(0, 3);
+    } else {
+      // The clicked subconcept isn't weak for either side, AND there are
+      // no other weak items under its concept. Fall back to pair-wide so
+      // the user still gets a session instead of an error screen.
+      scoped = sortRequesterFirst(weakItems);
+    }
+  } else if (focusConceptId) {
+    const sameConcept = weakItems.filter((w) => w.conceptId === focusConceptId);
+    scoped = sameConcept.length > 0
+      ? sortRequesterFirst(sameConcept)
+      : sortRequesterFirst(weakItems);
+  } else {
+    scoped = sortRequesterFirst(weakItems);
+  }
+
   // Cap to keep plan generation fast and the session short. 6 stitches ≈
-  // 12 steps ≈ a 30–45 minute session.
+  // 12 steps ≈ a 30–45 minute session. (Subconcept-click already capped
+  // itself at 3 above; this is the concept/pair-wide ceiling.)
   const MAX_STITCHES = 6;
-  const trimmed = weakItems.slice(0, MAX_STITCHES);
+  const trimmed = scoped.slice(0, MAX_STITCHES);
 
   // Pull lecture-derived materials for the trimmed weak subconcepts. Used
   // to ground the planner prompt; subconcepts without a materials row
@@ -276,15 +349,52 @@ export async function createStitchSpace(
 export async function startStitchSpaceForm(formData: FormData): Promise<void> {
   const courseId = String(formData.get("courseId") ?? "");
   const partnerUserId = String(formData.get("partnerUserId") ?? "");
+  // Empty strings get normalized to null — easier to reason about
+  // downstream than juggling "" vs undefined vs null.
+  const conceptIdRaw = String(formData.get("conceptId") ?? "");
+  const subconceptIdRaw = String(formData.get("subconceptId") ?? "");
+  const focusConceptId = conceptIdRaw.length > 0 ? conceptIdRaw : null;
+  const focusSubconceptId = subconceptIdRaw.length > 0 ? subconceptIdRaw : null;
   if (!courseId || !partnerUserId) {
     throw new Error("missing courseId or partnerUserId");
   }
-  const res = await createStitchSpace(courseId, partnerUserId);
+  const res = await createStitchSpace(
+    courseId,
+    partnerUserId,
+    focusConceptId,
+    focusSubconceptId
+  );
   if (!res.ok) {
     // redirect with an error param so the dashboard can show a toast.
     redirect(`/student?spaceError=${encodeURIComponent(res.error)}`);
   }
   redirect(`/space/${res.spaceId}`);
+}
+
+// ---------------------------------------------------------------------------
+// sortRequesterFirst — Fix B's ordering rule.
+//
+// Group items by who actually needs the lesson:
+//   1. Requester is weak (mine < WEAK_THRESHOLD). Sorted by mine ascending,
+//      so the requester's worst topics get planned first.
+//   2. Only the partner is weak. Sorted by theirs ascending. These survive
+//      because reciprocal teaching is core to Stitch Spaces, but they
+//      come after the requester's own gaps so the session always pays
+//      the requester back for showing up.
+//
+// Used inside createStitchSpace after the scope filter; defined at module
+// scope so the action body stays readable.
+// ---------------------------------------------------------------------------
+function sortRequesterFirst<
+  T extends { mine: number; theirs: number }
+>(items: T[]): T[] {
+  const mineWeak = items
+    .filter((w) => w.mine < WEAK_THRESHOLD)
+    .sort((a, b) => a.mine - b.mine);
+  const theirsOnly = items
+    .filter((w) => w.mine >= WEAK_THRESHOLD && w.theirs < WEAK_THRESHOLD)
+    .sort((a, b) => a.theirs - b.theirs);
+  return [...mineWeak, ...theirsOnly];
 }
 
 // ---------------------------------------------------------------------------

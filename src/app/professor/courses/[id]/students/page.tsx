@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import { signOut } from "@/app/(auth)/actions";
 import { CourseTabs } from "../CourseTabs";
 import { cellHex } from "@/lib/ribbon";
@@ -52,17 +53,27 @@ export default async function CourseStudents({
     .eq("concepts.course_id", id);
   const subIds = (subRows ?? []).map((s) => s.id);
 
-  const { data: masteryRows } =
-    subIds.length > 0
-      ? await supabase
-          .from("user_subconcept_mastery")
-          .select("user_id, subconcept_id, score")
-          .in("subconcept_id", subIds)
-      : { data: [] as Array<{ user_id: string; subconcept_id: string; score: number }> };
+  // Paginated through fetchAllRows because Supabase hosted PostgREST
+  // caps API responses at 1000 rows by default — `.range(0, 99999)`
+  // looks like it should bypass it but the cap still applies. A class of
+  // N students × M subconcepts blows past 1000 quickly (52 × 24 = 1248)
+  // and the silent truncation showed up as "newest-enrolled students
+  // appear to have no mastery data" because their rows fell off the
+  // tail of the response.
+  const { rows: masteryRows } = subIds.length > 0
+    ? await fetchAllRows<{ user_id: string; subconcept_id: string; score: number }>(
+        (from, to) =>
+          supabase
+            .from("user_subconcept_mastery")
+            .select("user_id, subconcept_id, score")
+            .in("subconcept_id", subIds)
+            .range(from, to)
+      )
+    : { rows: [] as Array<{ user_id: string; subconcept_id: string; score: number }> };
 
   type Agg = { sum: number; n: number; weak: number };
   const aggByUser = new Map<string, Agg>();
-  for (const m of masteryRows ?? []) {
+  for (const m of masteryRows) {
     let a = aggByUser.get(m.user_id);
     if (!a) {
       a = { sum: 0, n: 0, weak: 0 };
