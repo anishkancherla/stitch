@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SpacesPlanner, PlannerWeakItem } from "@/lib/llm/SpacesPlanner";
+import { getDemoStitches } from "@/lib/demoPlans";
 import {
   expandPlan,
   gradeQuiz,
@@ -216,7 +217,23 @@ export async function createStitchSpace(
   // 12 steps ≈ a 30–45 minute session. (Subconcept-click already capped
   // itself at 3 above; this is the concept/pair-wide ceiling.)
   const MAX_STITCHES = 6;
-  const trimmed = scoped.slice(0, MAX_STITCHES);
+  let trimmed = scoped.slice(0, MAX_STITCHES);
+
+  // For the Anish + Andrew demo pair we override the focus-scoped trimming
+  // and force the full canned plan's subconcepts so every demo run has the
+  // same 3 stitches (peer→learner, llm_teach, learner→peer). Card creation
+  // below loops over `trimmed`, so this ensures cards exist for every
+  // stitch the demo plan is going to produce.
+  const demoStitchesPreview = getDemoStitches(
+    [user.id, partnerUserId]
+  );
+  if (demoStitchesPreview) {
+    const demoSubIds = new Set(demoStitchesPreview.map((s) => s.subconceptId));
+    const demoItems = weakItems.filter((w) => demoSubIds.has(w.subconceptId));
+    if (demoItems.length === demoStitchesPreview.length) {
+      trimmed = demoItems;
+    }
+  }
 
   // Pull lecture-derived materials for the trimmed weak subconcepts. Used
   // to ground the planner prompt; subconcepts without a materials row
@@ -251,20 +268,26 @@ export async function createStitchSpace(
     { userId: partnerUserId, name: nameById.get(partnerUserId) ?? "Partner" },
   ];
 
-  // Plan generation — one Gemini call. Bubble up the message instead of
-  // crashing the route so the UI can show a retry button.
+  // Plan generation. The Anish + Andrew demo pair short-circuits to a
+  // hardcoded plan so demos are deterministic and never burn Gemini quota.
+  // Every other pair goes through the real LLM planner.
   let stitches: PlannerStitch[];
-  try {
-    const planner = new SpacesPlanner();
-    const out = await planner.plan({
-      members,
-      weakItems: trimmed,
-      weakThreshold: WEAK_THRESHOLD,
-    });
-    stitches = out.stitches;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "plan generation failed";
-    return { ok: false, error: msg };
+  const demo = getDemoStitches(members.map((m) => m.userId));
+  if (demo) {
+    stitches = demo;
+  } else {
+    try {
+      const planner = new SpacesPlanner();
+      const out = await planner.plan({
+        members,
+        weakItems: trimmed,
+        weakThreshold: WEAK_THRESHOLD,
+      });
+      stitches = out.stitches;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "plan generation failed";
+      return { ok: false, error: msg };
+    }
   }
 
   const meta = new Map(

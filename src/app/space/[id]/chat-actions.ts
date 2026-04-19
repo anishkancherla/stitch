@@ -1,7 +1,7 @@
 "use server";
 
 // In-room AI for Stitch Spaces. Three callable surfaces, all backed by
-// Gemini + the prof's lecture material:
+// OpenAI + the prof's lecture material:
 //
 //   askStitchAI    — collapsible side-panel chat tutor. Ephemeral.
 //   getQuizHint    — per-question Socratic nudge that doesn't reveal the
@@ -15,10 +15,11 @@
 // re-load the step from the DB (don't trust client-supplied step shapes).
 // Nothing here writes to the DB — chat is intentionally not persisted.
 
-import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SessionPlan, QuizStep, QuizQuestion } from "@/lib/spaces";
+import { getDemoHint, getDemoExplanations } from "@/lib/demoPlans";
+import { callOpenAI } from "@/lib/llm/openaiClient";
 
 // ---------------------------------------------------------------------------
 // Types returned by these actions
@@ -53,20 +54,6 @@ export type FeedbackResult =
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-// One Gemini client per request is fine — instantiation is cheap and
-// keeps each action self-contained.
-function gemini(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-  return new GoogleGenAI({ apiKey });
-}
-
-// Use flash-lite to stay under the free-tier daily quota — `gemini-2.5-flash`
-// caps at 20 requests/day on the free tier, and chat/hint/feedback combined
-// can blow through that in a single demo session. Flash-lite is plenty for
-// these short, well-grounded prompts.
-const MODEL = "gemini-2.5-flash-lite";
 
 interface RoomContext {
   step: SessionPlan["steps"][number];
@@ -146,20 +133,9 @@ function materialsBlock(
   return lines.join("\n");
 }
 
-async function callGemini(prompt: string, asJson = false): Promise<string> {
-  const response = await gemini().models.generateContent({
-    model: MODEL,
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: asJson ? { responseMimeType: "application/json" } : undefined,
-  });
-  const text = response.text;
-  if (!text) throw new Error("empty response from Gemini");
-  return text;
-}
-
-// Strip ```json fences + slice to the outermost {...}. Same logic as
-// LLMProvider.extractJsonString but local so this file doesn't reach into
-// a class for a one-liner.
+// Strip ```json fences + slice to the outermost {...}. OpenAI's json_object
+// mode usually returns clean JSON, but we keep this as belt-and-suspenders
+// in case a model occasionally wraps in fences.
 function extractJsonObject(text: string): string {
   const trimmed = text
     .trim()
@@ -227,7 +203,7 @@ Student: ${userMsg}
 Stitch AI:`;
 
   try {
-    const text = await callGemini(prompt);
+    const text = await callOpenAI(prompt);
     return { ok: true, reply: text.trim() };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "AI call failed";
@@ -252,6 +228,13 @@ export async function getQuizHint(
   const q = ctx.step.questions[questionIdx];
   if (!q) return { ok: false, error: "question not found" };
 
+  // Demo-pair short-circuit: if this question is one of the canned demo
+  // MCQs, return the pre-written hint and skip the LLM entirely. Kept
+  // around as a zero-latency fast path for the demo, even though we're
+  // now on OpenAI and quota is no longer a concern.
+  const cannedHint = getDemoHint(ctx.step.subconceptId, questionIdx);
+  if (cannedHint) return { ok: true, hint: cannedHint };
+
   const prompt = `You are giving a HINT to a student about to answer a multiple-choice question. Your hint must NOT reveal which choice is correct, must NOT eliminate any choice, and must NOT restate the question.
 
 ${materialsBlock(ctx.step, ctx.materials)}
@@ -263,7 +246,7 @@ ${q.choices.map((c, i) => `${i + 1}. ${c}`).join("\n")}
 Write a single-sentence Socratic nudge. Point them to the underlying idea or the relevant key point above without naming a choice. Keep it under 25 words. Plain prose, no quotes, no preface like "Hint:".`;
 
   try {
-    const text = await callGemini(prompt);
+    const text = await callOpenAI(prompt);
     const cleaned = text.trim().replace(/^["'`]|["'`]$/g, "").trim();
     return { ok: true, hint: cleaned };
   } catch (e) {
@@ -296,7 +279,24 @@ export async function getQuizFeedback(
   });
   const correctCount = grades.filter(Boolean).length;
 
-  // One Gemini call for the whole set — cheaper than per-question and the
+  // Demo-pair short-circuit: if this quiz is one of the 3 canned demo
+  // quizzes, return the pre-written per-question explanations and skip
+  // the LLM entirely. Kept as a zero-latency fast path now that we're
+  // on OpenAI (quota was the original motivation under Gemini).
+  const cannedExplanations = getDemoExplanations(quiz.subconceptId, grades);
+  if (cannedExplanations) {
+    const feedback: QuizFeedbackItem[] = grades.map((right, i) => ({
+      correct: right,
+      explanation: cannedExplanations[i],
+    }));
+    return {
+      ok: true,
+      feedback,
+      score: { correct: correctCount, total: quiz.questions.length },
+    };
+  }
+
+  // One LLM call for the whole set — cheaper than per-question and the
   // model can keep cross-question context (e.g. avoid repeating itself).
   const questionsBlock = quiz.questions
     .map((q: QuizQuestion, i: number) => {
@@ -338,7 +338,7 @@ Rules for each explanation:
 - The "feedback" array MUST have exactly ${quiz.questions.length} entries in question order.`;
 
   try {
-    const text = await callGemini(prompt, true);
+    const text = await callOpenAI(prompt, { json: true });
     const parsed = JSON.parse(extractJsonObject(text)) as {
       feedback?: Array<{ explanation?: unknown }>;
     };

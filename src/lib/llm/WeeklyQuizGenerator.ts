@@ -8,9 +8,9 @@
 // subconcept we keep what we got (don't re-prompt — keeps the demo fast),
 // and `normalizeQuestions` from quizSchema.ts handles wire-shape cleanup.
 
-import { GoogleGenAI } from "@google/genai";
 import { QuizQuestion } from "../spaces";
 import { normalizeQuestions } from "./quizSchema";
+import { callOpenAI, DEFAULT_MODEL } from "./openaiClient";
 
 export interface WeeklyQuizSubconceptInput {
   subconceptId: string;
@@ -39,19 +39,11 @@ export interface WeeklyQuizGenOutput {
 }
 
 export class WeeklyQuizGenerator {
-  private ai: GoogleGenAI;
   private model: string;
 
-  // Default to flash-lite: free-tier daily quota for plain `gemini-2.5-flash`
-  // is only 20 requests/day, which the rest of the app burns through fast
-  // (planner + chat + hint + feedback all hit it). Flash-lite has a much
-  // larger free-tier daily allowance and is plenty for MCQ authoring.
-  constructor(model = "gemini-2.5-flash-lite") {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not set. Add it to your .env file.");
-    }
-    this.ai = new GoogleGenAI({ apiKey });
+  // Defaults to whatever openaiClient picks (currently gpt-4o-mini). Plenty
+  // strong for MCQ authoring; we don't need the full gpt-4o tier here.
+  constructor(model: string = DEFAULT_MODEL) {
     this.model = model;
   }
 
@@ -60,13 +52,7 @@ export class WeeklyQuizGenerator {
       throw new Error("WeeklyQuizGenerator: at least one subconcept required");
     }
     const prompt = this.buildPrompt(input);
-    const response = await this.ai.models.generateContent({
-      model: this.model,
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { responseMimeType: "application/json" },
-    });
-    const text = response.text;
-    if (!text) throw new Error("No text returned from Gemini API");
+    const text = await callOpenAI(prompt, { model: this.model, json: true });
 
     const cleaned = stripFences(text);
     let parsed: unknown;

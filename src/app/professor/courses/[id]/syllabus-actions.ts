@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { GeminiProvider } from "@/lib/llm/GeminiProvider";
+import { OpenAIProvider } from "@/lib/llm/OpenAIProvider";
 
 export type UploadSyllabusState =
   | { ok: true; conceptsCreated: number }
@@ -85,17 +85,17 @@ export async function uploadSyllabus(
     };
   }
 
-  // Gemini call. Read file → base64. Buffer.from(ArrayBuffer) is fine in Node.
+  // OpenAI call. Read file → base64. Buffer.from(ArrayBuffer) is fine in Node.
   let parsed;
   try {
     const buf = Buffer.from(await file.arrayBuffer());
     const base64 = buf.toString("base64");
-    const provider = new GeminiProvider();
+    const provider = new OpenAIProvider();
     parsed = await provider.parseSyllabus(base64, mime);
   } catch (e) {
     return {
       ok: false,
-      error: `Gemini failed to parse the syllabus: ${e instanceof Error ? e.message : String(e)}`,
+      error: `OpenAI failed to parse the syllabus: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 

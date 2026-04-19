@@ -54,6 +54,13 @@ export function SpaceRoom({
   const [responders, setResponders] = useState<Set<string>>(new Set());
   const [pending, startTransition] = useTransition();
 
+  // Pinned step keeps the rendered quiz step on screen after the viewer
+  // submits, so they can read the per-question feedback before being kicked
+  // forward by the server's auto-advance. null = follow server (default).
+  // The user clicks an explicit "Continue" button to unpin and jump to
+  // whatever current_step has become while they were reading.
+  const [pinnedStep, setPinnedStep] = useState<number | null>(null);
+
   // -- Realtime sync ---------------------------------------------------------
   useEffect(() => {
     const supabase = createClient();
@@ -136,7 +143,11 @@ export function SpaceRoom({
     };
   }, [spaceId]);
 
-  const step: SessionStep | undefined = plan.steps[currentStep];
+  // What we actually render. Diverges from currentStep only when a quiz
+  // submission has pinned us to its feedback view; otherwise tracks the
+  // server's source of truth.
+  const displayedStep = pinnedStep ?? currentStep;
+  const step: SessionStep | undefined = plan.steps[displayedStep];
   const memberIds = useMemo(
     () => plan.members.map((m) => m.userId),
     [plan.members]
@@ -153,13 +164,25 @@ export function SpaceRoom({
 
   const viewerSubmitted = responders.has(viewerUserId);
   const viewerIsRequired = required.includes(viewerUserId);
-  const isEnded = status === "ended" || currentStep >= plan.steps.length;
+  // Don't show the end screen while the viewer is pinned reading feedback
+  // from the final quiz step. Server flips status to "ended" the instant
+  // the last quiz response lands, but the viewer hasn't read it yet.
+  const isEnded =
+    pinnedStep === null &&
+    (status === "ended" || currentStep >= plan.steps.length);
 
   function handleStepSubmit(
     payload: { kind: "done" } | { kind: "quiz"; answers: number[] }
   ) {
+    // Pin BEFORE the server call so the inevitable realtime auto-advance
+    // can't yank us off this step before the user sees per-question
+    // feedback. We pin to displayedStep (not currentStep) so a chain of
+    // submissions on consecutive quizzes pins the right one.
+    if (payload.kind === "quiz") {
+      setPinnedStep(displayedStep);
+    }
     startTransition(async () => {
-      const res = await submitStepResponse(spaceId, currentStep, payload);
+      const res = await submitStepResponse(spaceId, displayedStep, payload);
       if (!res.ok) {
         // Common case in practice: stale tab whose Supabase cookie got
         // invalidated by a sign-in in another window. Bounce to /login
@@ -193,9 +216,20 @@ export function SpaceRoom({
     });
   }
 
+  // Called from the quiz step's "Continue" button after the viewer has
+  // read their feedback. Releases the pin so the room jumps to whatever
+  // current_step is (which is usually displayedStep+1, but could be
+  // further along if other transitions have already happened).
+  function handleContinue() {
+    setPinnedStep(null);
+    // Force a refresh so the realtime-driven board state for the new step
+    // (cards, snippets, etc) is fully hydrated when we render it.
+    router.refresh();
+  }
+
   const stepProgress = isEnded
     ? plan.steps.length
-    : Math.min(currentStep + 1, plan.steps.length);
+    : Math.min(displayedStep + 1, plan.steps.length);
   const progressPct =
     plan.steps.length === 0
       ? 0
@@ -217,7 +251,9 @@ export function SpaceRoom({
           <p className="mt-3 text-sm text-muted">
             {isEnded
               ? "Session ended"
-              : `Step ${stepProgress} of ${plan.steps.length}`}
+              : pinnedStep === displayedStep && currentStep > displayedStep
+                ? `Step ${stepProgress} of ${plan.steps.length} · reviewing your answers`
+                : `Step ${stepProgress} of ${plan.steps.length}`}
             <span className="mx-2 text-muted/50">·</span>
             <span className="font-mono text-foreground/70">
               you are {memberNames[viewerUserId] ?? "?"}
@@ -265,17 +301,21 @@ export function SpaceRoom({
         />
       ) : step ? (
         <StepView
-          key={currentStep}
+          key={displayedStep}
           spaceId={spaceId}
           step={step}
-          stepIdx={currentStep}
+          stepIdx={displayedStep}
           viewerUserId={viewerUserId}
           memberNames={memberNames}
           partnerName={partnerName}
-          viewerSubmitted={viewerSubmitted}
+          viewerSubmitted={viewerSubmitted || pinnedStep === displayedStep}
           viewerIsRequired={viewerIsRequired}
           submitting={pending}
           onSubmit={handleStepSubmit}
+          onContinue={handleContinue}
+          serverHasAdvanced={
+            pinnedStep === displayedStep && currentStep > displayedStep
+          }
         />
       ) : (
         <p className="text-sm text-muted">No more steps.</p>

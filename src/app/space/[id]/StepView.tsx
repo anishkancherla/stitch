@@ -26,6 +26,14 @@ interface StepViewProps {
   onSubmit: (
     payload: { kind: "done" } | { kind: "quiz"; answers: number[] }
   ) => void;
+  /** Quiz-only: called when the viewer clicks "Continue" after reviewing
+   *  per-question feedback. The parent uses this to release the step pin
+   *  and let the room jump to whatever current_step has become. */
+  onContinue?: () => void;
+  /** Quiz-only: the server has already advanced past this step (i.e. the
+   *  viewer is sitting on a pinned feedback view). Drives the visibility
+   *  of the Continue button so it doesn't appear before submission. */
+  serverHasAdvanced?: boolean;
 }
 
 /**
@@ -45,6 +53,8 @@ export function StepView({
   viewerIsRequired,
   submitting,
   onSubmit,
+  onContinue,
+  serverHasAdvanced,
 }: StepViewProps) {
   // Stitch AI is rendered alongside every step type. Local state lives
   // inside the panel; we just give it the (spaceId, stepIdx) so it can
@@ -100,6 +110,8 @@ export function StepView({
             viewerIsRequired={viewerIsRequired}
             submitting={submitting}
             onSubmit={onSubmit}
+            onContinue={onContinue}
+            serverHasAdvanced={serverHasAdvanced ?? false}
           />
           {chat}
         </>
@@ -297,6 +309,8 @@ function QuizView({
   viewerIsRequired,
   submitting,
   onSubmit,
+  onContinue,
+  serverHasAdvanced,
 }: {
   spaceId: string;
   step: QuizStep;
@@ -309,6 +323,8 @@ function QuizView({
   onSubmit: (
     payload: { kind: "done" } | { kind: "quiz"; answers: number[] }
   ) => void;
+  onContinue?: () => void;
+  serverHasAdvanced: boolean;
 }) {
   // -1 = unanswered. The parent passes key={stepIdx} so this component
   // remounts on step change — no effect needed to reset between steps.
@@ -316,6 +332,14 @@ function QuizView({
   const [answers, setAnswers] = useState<number[]>(() =>
     new Array(step.questions.length).fill(-1)
   );
+
+  // Local "I have hit submit" flag. Critical: we cannot rely on the
+  // parent-supplied `viewerSubmitted` because that's derived from a
+  // responders set that gets wiped when the server's current_step
+  // advances. Tracking submission locally keeps the feedback view
+  // stable for as long as the component is mounted (which is until
+  // the parent unpins and the step key changes).
+  const [submittedLocal, setSubmittedLocal] = useState(false);
 
   // Per-question hint state. `null` = not yet requested, otherwise the
   // last hint we received (one hint per question, button disables after).
@@ -326,13 +350,28 @@ function QuizView({
   const [hintError, setHintError] = useState<string | null>(null);
 
   // Per-question feedback after submit. Populated by getQuizFeedback —
-  // server re-grades, then writes one explanation per question.
+  // server re-grades, then writes one explanation per question. Also
+  // doubles as the source-of-truth for the green/red coloring on the
+  // option labels (no need to re-derive correctness on the client).
   const [feedback, setFeedback] = useState<QuizFeedbackItem[] | null>(null);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [feedbackPending, startFeedback] = useTransition();
 
   const isTarget = step.targetUserIds.includes(viewerUserId);
   const allAnswered = answers.every((a) => a >= 0);
+  // "Submitted" for display purposes uses local state so it survives the
+  // parent's responder-set wipe on auto-advance. Falls back to the
+  // upstream flag for the (rare) case where the viewer landed on a step
+  // already submitted in a previous session — we still want the form
+  // disabled in that case.
+  const submittedView = submittedLocal || viewerSubmitted;
+
+  // The server-side score so we can show a clean "X / Y correct" headline
+  // alongside the per-question breakdown. Computed from feedback to avoid
+  // a second round-trip.
+  const correctCount = feedback
+    ? feedback.filter((f) => f.correct).length
+    : 0;
 
   async function fetchHint(qi: number) {
     if (hints[qi] !== null || hintLoading !== null) return;
@@ -353,6 +392,9 @@ function QuizView({
 
   function submit() {
     if (!allAnswered) return;
+    // Flip local-submitted FIRST so the feedback view persists even if
+    // the server's auto-advance fires before getQuizFeedback returns.
+    setSubmittedLocal(true);
     // Fire feedback request alongside the regular submit. The server
     // action grades against `correctIndex` so if the client lies about
     // its answers, the feedback list reflects the lie — but the actual
@@ -384,6 +426,35 @@ function QuizView({
         </p>
       ) : (
         <>
+          {/* Score banner — appears once feedback lands. Sits above the
+              questions so the user gets the verdict at a glance before
+              digging into per-question explanations. */}
+          {submittedView && feedback && (
+            <div
+              className={`mb-5 rounded-2xl border p-5 ${
+                correctCount === feedback.length
+                  ? "border-emerald-300 bg-emerald-50"
+                  : correctCount / feedback.length >= 0.6
+                    ? "border-amber-300 bg-amber-50"
+                    : "border-red-300 bg-red-50"
+              }`}
+            >
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-foreground/70">
+                Quiz result
+              </p>
+              <p className="mt-1 font-inter text-2xl font-semibold text-foreground">
+                {correctCount} / {feedback.length} correct
+              </p>
+              <p className="mt-1 text-sm text-foreground/80">
+                {correctCount === feedback.length
+                  ? "Clean sweep — your card is flipping green."
+                  : correctCount / feedback.length >= 0.6
+                    ? "You passed — close enough to lock this one in."
+                    : "Didn't quite land it. Look at the wrong ones below before moving on."}
+              </p>
+            </div>
+          )}
+
           <ol className="space-y-5">
             {step.questions.map((q, qi) => {
               const fb = feedback?.[qi];
@@ -396,9 +467,12 @@ function QuizView({
                     {q.choices.map((choice, ci) => {
                       const id = `q${qi}-c${ci}`;
                       const checked = answers[qi] === ci;
-                      // Once feedback is in, mark the user's chosen
-                      // option as correct/wrong with subtle color.
-                      const showResult = viewerSubmitted && fb !== undefined;
+                      // Once feedback is in we mark the right answer in
+                      // green and the user's wrong pick (if any) in red.
+                      // Driven off `submittedView` so the colors persist
+                      // even after the server auto-advance wipes the
+                      // upstream `viewerSubmitted` flag.
+                      const showResult = submittedView && fb !== undefined;
                       const isCorrectChoice =
                         showResult && ci === q.correctIndex;
                       const isWrongPick =
@@ -415,14 +489,14 @@ function QuizView({
                                   : checked
                                     ? "border-foreground bg-foreground/5"
                                     : "border-border bg-background hover:bg-zinc-50"
-                            } ${viewerSubmitted ? "cursor-not-allowed opacity-90" : ""}`}
+                            } ${submittedView ? "cursor-not-allowed opacity-90" : ""}`}
                           >
                             <input
                               id={id}
                               type="radio"
                               name={`q${qi}`}
                               className="accent-foreground"
-                              disabled={viewerSubmitted}
+                              disabled={submittedView}
                               checked={checked}
                               onChange={() => {
                                 setAnswers((prev) => {
@@ -442,7 +516,7 @@ function QuizView({
                   {/* Pre-submit: hint button + (once used) the hint text.
                       Disappears after submit because the explanation
                       below replaces it. */}
-                  {!viewerSubmitted && (
+                  {!submittedView && (
                     <div className="mt-2">
                       {hints[qi] === null ? (
                         <button
@@ -463,7 +537,7 @@ function QuizView({
                   )}
 
                   {/* Post-submit: explanation lifted from getQuizFeedback. */}
-                  {viewerSubmitted && fb && (
+                  {submittedView && fb && (
                     <div
                       className={`mt-2 rounded-md border px-3 py-2 text-xs leading-relaxed ${
                         fb.correct
@@ -486,7 +560,7 @@ function QuizView({
             <p className="mt-3 text-xs text-red-700">{hintError}</p>
           )}
 
-          {viewerSubmitted && !feedback && (
+          {submittedView && !feedback && (
             <p className="mt-4 text-xs italic text-muted">
               {feedbackPending
                 ? "Stitch AI is writing per-question feedback…"
@@ -496,22 +570,46 @@ function QuizView({
             </p>
           )}
 
-          <ActionBar
-            onPrimary={submit}
-            primaryLabel={
-              viewerSubmitted ? "Submitted" : submitting ? "Grading…" : "Submit answers"
-            }
-            primaryDisabled={
-              viewerSubmitted || submitting || !allAnswered || !viewerIsRequired
-            }
-            hint={
-              viewerSubmitted
-                ? "Your card flipped on the board above based on your score. Waiting on the rest."
-                : allAnswered
+          {!submittedView ? (
+            <ActionBar
+              onPrimary={submit}
+              primaryLabel={submitting ? "Grading…" : "Submit answers"}
+              primaryDisabled={
+                submitting || !allAnswered || !viewerIsRequired
+              }
+              hint={
+                allAnswered
                   ? "No going back once you submit."
                   : "Pick one option per question."
-            }
-          />
+              }
+            />
+          ) : (
+            // Post-submit action: a single Continue button that releases
+            // the parent's pin so the room jumps to whatever step the
+            // server has advanced to. We disable until feedback (or its
+            // error) has resolved so the user actually sees the per-
+            // question breakdown before moving on.
+            <ActionBar
+              onPrimary={() => onContinue?.()}
+              primaryLabel={
+                serverHasAdvanced
+                  ? "Continue to next step →"
+                  : "Waiting on partner…"
+              }
+              primaryDisabled={
+                !onContinue ||
+                !serverHasAdvanced ||
+                (!feedback && !feedbackError)
+              }
+              hint={
+                serverHasAdvanced
+                  ? feedback || feedbackError
+                    ? "Read your feedback above, then continue when you're ready."
+                    : "Stitch AI is writing your per-question feedback…"
+                  : `Your card has flipped on the board. Waiting for ${partnerName} to finish before the next step unlocks.`
+              }
+            />
+          )}
         </>
       )}
     </StepFrame>

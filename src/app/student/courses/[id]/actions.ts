@@ -255,11 +255,71 @@ export async function getMatchesForConcept(
     if (idx > 0) {
       const [pinned] = ranked.splice(idx, 1);
       ranked.unshift(pinned);
+    } else if (idx === -1) {
+      // rankMatches dropped the partner because their mastery wasn't
+      // strictly higher than the requester's on the focused cell (the
+      // "teach-me" filter). For the demo we override that — pin him
+      // anyway by synthesizing a MatchResult from the data we already
+      // fetched. Without this, demo runs on subconcepts where both
+      // students are weak (e.g. "Analyzing Loops") would drop the
+      // partner and surface some unrelated classmate at #1.
+      const partnerName = nameById.get(demoPin) ?? "Partner";
+      const partnerMastery =
+        classmatesMap.get(demoPin) ?? new Map<string, number>();
+      const conceptSubs = subconcepts
+        .filter((s) => s.conceptId === conceptId)
+        .map((s) => s.id);
+      const partnerFocus = focusSubconcept(
+        partnerMastery,
+        subconceptId,
+        conceptSubs
+      );
+      // Try to surface a real reciprocal subconcept if one exists, so the
+      // panel still shows "you can help them with X" properly. Otherwise
+      // null — the UI tolerates that.
+      let reciprocal: { id: string; label: string } | null = null;
+      let bestGap = 0;
+      for (const s of subconcepts) {
+        const mine = myMastery.get(s.id) ?? 0.5;
+        const theirs = partnerMastery.get(s.id) ?? 0.5;
+        if (mine < 0.6 || theirs > 0.55) continue;
+        const gap = mine - theirs;
+        if (gap > bestGap) {
+          bestGap = gap;
+          reciprocal = { id: s.id, label: s.label };
+        }
+      }
+      const synthesized = {
+        userId: demoPin,
+        name: partnerName,
+        avatarUrl: null,
+        theirMastery: Math.round(partnerFocus * 100) / 100,
+        myMastery: Math.round(myFocusMastery * 100) / 100,
+        reciprocalSubconcept: reciprocal,
+        availabilityOverlap: [],
+        overlapHours: 0,
+        score: 999, // sentinel — only used for sort, but we manually unshift
+      };
+      ranked.unshift(synthesized);
     }
     matches = ranked.slice(0, limit);
   }
 
   return { ok: true, matches, myFocusMastery, alreadyStrong: false };
+}
+
+// Inline aggregate helper — duplicated from matching.ts.focusMastery to
+// avoid an extra import for the demo-pin synthesizer.
+function focusSubconcept(
+  mastery: Map<string, number>,
+  subconceptId: string | null,
+  conceptSubIds: string[]
+): number {
+  if (subconceptId) return mastery.get(subconceptId) ?? 0.5;
+  if (conceptSubIds.length === 0) return 0.5;
+  let sum = 0;
+  for (const sid of conceptSubIds) sum += mastery.get(sid) ?? 0.5;
+  return sum / conceptSubIds.length;
 }
 
 // ---------------------------------------------------------------------------

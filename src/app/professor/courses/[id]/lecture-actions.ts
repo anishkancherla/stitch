@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { GeminiProvider } from "@/lib/llm/GeminiProvider";
+import { OpenAIProvider } from "@/lib/llm/OpenAIProvider";
 
 export type UploadLectureState =
   | { ok: true; lectureTitle: string; subconceptsCreated: number }
@@ -86,16 +86,16 @@ export async function uploadLecture(
     return { ok: false, error: "Picked concept doesn't belong to this course." };
   }
 
-  // Ask Gemini for subconcepts. Pass the File directly — Files API accepts
-  // a Blob and infers from the explicit mimeType we hand it.
+  // Ask OpenAI for subconcepts. Pass the File directly — the provider
+  // routes it (PDF inline, PPTX/DOCX extracted to text first).
   let parsed;
   try {
-    const provider = new GeminiProvider();
+    const provider = new OpenAIProvider();
     parsed = await provider.parseLecture(file, mime);
   } catch (e) {
     return {
       ok: false,
-      error: `Gemini failed to parse the lecture: ${
+      error: `OpenAI failed to parse the lecture: ${
         e instanceof Error ? e.message : String(e)
       }`,
     };

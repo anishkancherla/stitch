@@ -1,9 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
 import {
   PlannerOutput,
   PlannerStitch,
 } from "../spaces";
 import { normalizeQuestions } from "./quizSchema";
+import { callOpenAI, DEFAULT_MODEL } from "./openaiClient";
 
 /**
  * Plan a Stitch Space session.
@@ -43,33 +43,18 @@ export interface PlannerInput {
 }
 
 export class SpacesPlanner {
-  private ai: GoogleGenAI;
   private model: string;
 
-  // Flash-lite for free-tier headroom — plain `gemini-2.5-flash` caps at
-  // 20 requests/day on the free tier, which gets eaten quickly between
-  // planner + chat + hint + feedback + weekly-quiz. Flash-lite handles
-  // the planner prompt fine and has a much larger daily allowance.
-  constructor(model = "gemini-2.5-flash-lite") {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not set. Add it to your .env file.");
-    }
-    this.ai = new GoogleGenAI({ apiKey });
+  // Defaults to whatever openaiClient picks (currently gpt-4o-mini). Cheap,
+  // fast, reliable JSON-mode output. Callers can override per-test if needed.
+  constructor(model: string = DEFAULT_MODEL) {
     this.model = model;
   }
 
   async plan(input: PlannerInput): Promise<PlannerOutput> {
     const prompt = this.buildPrompt(input);
 
-    const response = await this.ai.models.generateContent({
-      model: this.model,
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { responseMimeType: "application/json" },
-    });
-
-    const text = response.text;
-    if (!text) throw new Error("No text returned from Gemini API");
+    const text = await callOpenAI(prompt, { model: this.model, json: true });
 
     const cleaned = stripFences(text);
     let parsed: unknown;
