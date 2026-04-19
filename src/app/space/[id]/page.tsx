@@ -122,7 +122,7 @@ function SpaceShell({ children }: { children: React.ReactNode }) {
         right={
           <Link
             href="/student"
-            className="rounded-full border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
+            className="rounded-xl border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
           >
             Leave
           </Link>

@@ -43,7 +43,7 @@ export function JoinCourseForm() {
         <button
           type="submit"
           disabled={pending}
-          className="h-11 rounded-full bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="h-11 rounded-xl bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {pending ? "Joining…" : "Join"}
         </button>

@@ -192,7 +192,7 @@ function SpaceSubmitButton() {
     <button
       type="submit"
       disabled={pending}
-      className="shrink-0 rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+      className="shrink-0 rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
     >
       {pending ? "Building…" : "Start Stitch Space"}
     </button>

@@ -18,7 +18,7 @@ export default function LoginPage() {
         right={
           <Link
             href="/signup"
-            className="rounded-full border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
+            className="rounded-xl border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
           >
             Sign up
           </Link>
@@ -60,7 +60,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={pending}
-            className="mt-1 h-11 rounded-full bg-foreground text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="mt-1 h-11 rounded-xl bg-foreground text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {pending ? "Signing in…" : "Sign in"}
           </button>

@@ -29,7 +29,7 @@ export function ProfileForm({ initialName }: { initialName: string }) {
       <button
         type="submit"
         disabled={pending}
-        className="mt-1 h-11 self-start rounded-full bg-foreground px-6 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+        className="mt-1 h-11 self-start rounded-xl bg-foreground px-6 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
       >
         {pending ? "Saving…" : "Save"}
       </button>

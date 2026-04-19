@@ -137,14 +137,14 @@ export default async function CourseDetail({
           <div className="flex items-center gap-2">
             <Link
               href="/profile"
-              className="rounded-full border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
+              className="rounded-xl border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
             >
               Profile
             </Link>
             <form action={signOut}>
               <button
                 type="submit"
-                className="rounded-full border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
+                className="rounded-xl border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
               >
                 Sign out
               </button>

@@ -117,7 +117,7 @@ export function AvailabilityEditor({ initialBlocks }: AvailabilityEditorProps) {
           <button
             type="button"
             onClick={onClear}
-            className="rounded-full border border-border bg-background px-3 py-1 text-xs text-foreground hover:bg-zinc-50"
+            className="rounded-lg border border-border bg-background px-3 py-1 text-xs text-foreground hover:bg-zinc-50"
           >
             Clear
           </button>
@@ -125,7 +125,7 @@ export function AvailabilityEditor({ initialBlocks }: AvailabilityEditorProps) {
             type="button"
             onClick={onSave}
             disabled={pending}
-            className="rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background disabled:opacity-50"
+            className="rounded-lg bg-foreground px-3 py-1 text-xs font-medium text-background disabled:opacity-50"
           >
             {pending ? "Saving…" : "Save"}
           </button>

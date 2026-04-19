@@ -21,7 +21,7 @@ export function TopBar({ right }: Props) {
 
       <Link
         href="/"
-        className="justify-self-center font-display text-xl tracking-tight text-foreground"
+        className="justify-self-center font-display text-xl font-medium tracking-tight text-foreground"
       >
         stitch
       </Link>
@@ -30,7 +30,7 @@ export function TopBar({ right }: Props) {
         {right ?? (
           <Link
             href="/login"
-            className="rounded-full bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
+            className="rounded-xl bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
           >
             Sign in
           </Link>

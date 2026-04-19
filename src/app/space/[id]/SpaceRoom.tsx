@@ -218,7 +218,7 @@ export function SpaceRoom({
           <button
             type="button"
             onClick={handleEnd}
-            className="shrink-0 rounded-full border border-border bg-background px-4 py-1.5 text-xs font-medium text-muted hover:text-foreground"
+            className="shrink-0 rounded-xl border border-border bg-background px-4 py-1.5 text-xs font-medium text-muted hover:text-foreground"
           >
             End session
           </button>

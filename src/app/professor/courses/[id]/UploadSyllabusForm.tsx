@@ -45,7 +45,7 @@ export function UploadSyllabusForm({ courseId }: { courseId: string }) {
         <button
           type="submit"
           disabled={pending}
-          className="h-10 rounded-full bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="h-10 rounded-xl bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {pending ? "Parsing…" : "Generate ribbon"}
         </button>

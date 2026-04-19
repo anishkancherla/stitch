@@ -78,14 +78,14 @@ export default async function StudentHome({ searchParams }: StudentHomeProps) {
           <div className="flex items-center gap-2">
             <Link
               href="/profile"
-              className="rounded-full border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
+              className="rounded-xl border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
             >
               Profile
             </Link>
             <form action={signOut}>
               <button
                 type="submit"
-                className="rounded-full border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
+                className="rounded-xl border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50"
               >
                 Sign out
               </button>
@@ -128,7 +128,7 @@ export default async function StudentHome({ searchParams }: StudentHomeProps) {
                         {courseLabelById.get(s.course_id) ?? "Course"}
                       </p>
                     </div>
-                    <span className="ml-3 shrink-0 rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background">
+                    <span className="ml-3 shrink-0 rounded-lg bg-foreground px-3 py-1 text-xs font-medium text-background">
                       Join →
                     </span>
                   </Link>

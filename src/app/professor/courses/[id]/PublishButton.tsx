@@ -15,7 +15,7 @@ export function PublishButton({ courseId }: { courseId: string }) {
           await publishCourse(courseId);
         })
       }
-      className="h-10 rounded-full bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+      className="h-10 rounded-xl bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
     >
       {pending ? "Publishing…" : "Publish course"}
     </button>
