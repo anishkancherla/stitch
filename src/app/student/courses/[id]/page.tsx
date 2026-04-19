@@ -4,7 +4,7 @@ import { TopBar } from "@/components/TopBar";
 import { StudentRibbon } from "@/components/StudentRibbon";
 import { createClient } from "@/lib/supabase/server";
 import { signOut } from "@/app/(auth)/actions";
-import { buildGroups } from "@/lib/ribbon";
+import { buildGroups, cellHex } from "@/lib/ribbon";
 import { MasteryControls } from "./MasteryControls";
 import { RealtimeRibbonRefresher } from "@/components/RealtimeRibbonRefresher";
 
@@ -56,6 +56,22 @@ export default async function StudentCourseDetail({
       .select("subconcept_id, score")
       .eq("user_id", user!.id),
   ]);
+
+  // Filter mastery to only this course's subconcepts so the hero stats are
+  // about the course you're looking at — not the union of every course this
+  // student is enrolled in.
+  const courseSubIds = new Set(
+    (subconceptRows ?? []).map((s) => s.id as string)
+  );
+  const masteryHere = (masteryRows ?? []).filter((m) =>
+    courseSubIds.has(m.subconcept_id as string)
+  );
+  const avg =
+    masteryHere.length > 0
+      ? masteryHere.reduce((s, m) => s + m.score, 0) / masteryHere.length
+      : null;
+  const weakCount = masteryHere.filter((m) => m.score < 0.4).length;
+  const strongCount = masteryHere.filter((m) => m.score > 0.7).length;
 
   const concepts = (conceptRows ?? []).map((c) => ({
     id: c.id,
@@ -120,33 +136,59 @@ export default async function StudentCourseDetail({
         }
       />
 
-      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-6 pt-16 pb-16">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-6 pt-12 pb-20">
         <Link
           href="/student"
-          className="mb-4 text-sm text-muted hover:text-foreground"
+          className="mb-6 inline-flex w-fit items-center gap-1 text-sm text-muted hover:text-foreground"
         >
           ← Back to courses
         </Link>
 
-        <div className="flex items-baseline gap-3">
-          <span className="font-display text-2xl text-muted">
+        <section>
+          <p className="text-xs uppercase tracking-[0.18em] text-muted">
             {course.code}
-          </span>
-          <h1 className="font-display text-3xl tracking-tight text-foreground">
+          </p>
+          <h1 className="mt-2 font-inter text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
             {course.name}
           </h1>
-        </div>
+          <p className="mt-3 text-base text-muted">
+            Your personal mastery across every concept in this course.
+          </p>
 
-        <section className="mt-12">
-          <div className="flex items-baseline justify-between">
-            <h2 className="text-base font-medium text-foreground">
+          {/* Quick-glance summary: avg mastery, plus how many subconcepts
+              are still shaky vs locked in. Mirrors the prof's per-student
+              detail page so the visual language is consistent. */}
+          <dl className="mt-8 grid grid-cols-3 overflow-hidden rounded-2xl border border-border bg-background">
+            <Stat
+              label="Avg mastery"
+              value={avg === null ? "—" : avg.toFixed(2)}
+              swatch={avg}
+            />
+            <Stat
+              label="Weak"
+              value={String(weakCount)}
+              hint="< 0.40"
+              divided
+            />
+            <Stat
+              label="Strong"
+              value={String(strongCount)}
+              hint="> 0.70"
+              divided
+            />
+          </dl>
+        </section>
+
+        <section className="mt-14">
+          <div className="flex items-end justify-between">
+            <h2 className="font-inter text-2xl font-semibold tracking-tight text-foreground">
               Your ribbon
             </h2>
             <p className="text-xs text-muted">
-              Click any cell for the subconcept breakdown.
+              Click any cell to see who can stitch with you.
             </p>
           </div>
-          <div className="mt-3">
+          <div className="mt-6">
             <StudentRibbon
               courseId={course.id}
               groups={groups}
@@ -166,6 +208,38 @@ export default async function StudentCourseDetail({
           </div>
         </section>
       </main>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  hint,
+  swatch,
+  divided,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  swatch?: number | null;
+  divided?: boolean;
+}) {
+  return (
+    <div className={`px-6 py-5 ${divided ? "border-l border-border" : ""}`}>
+      <dt className="text-xs uppercase tracking-[0.16em] text-muted">{label}</dt>
+      <dd className="mt-2 flex items-baseline gap-2">
+        {swatch !== undefined && swatch !== null && (
+          <span
+            className="block h-3.5 w-3.5 shrink-0 rounded-[3px]"
+            style={{ backgroundColor: cellHex(swatch) }}
+          />
+        )}
+        <span className="font-display text-3xl font-medium tracking-tight text-foreground">
+          {value}
+        </span>
+        {hint && <span className="text-xs text-muted">{hint}</span>}
+      </dd>
     </div>
   );
 }

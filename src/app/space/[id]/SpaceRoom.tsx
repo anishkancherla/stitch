@@ -193,23 +193,33 @@ export function SpaceRoom({
     });
   }
 
+  const stepProgress = isEnded
+    ? plan.steps.length
+    : Math.min(currentStep + 1, plan.steps.length);
+  const progressPct =
+    plan.steps.length === 0
+      ? 0
+      : Math.round((stepProgress / plan.steps.length) * 100);
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <header className="flex items-baseline justify-between gap-4">
+    <div className="space-y-8">
+      {/* Header — bigger hero treatment with Inter for the member names so
+          the room feels like a deliberate space, not a scaffold around the
+          step card. */}
+      <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-[0.18em] text-muted">
             Stitch Space · {courseLabel}
           </p>
-          <h1 className="mt-1 truncate font-display text-3xl tracking-tight text-foreground">
+          <h1 className="mt-2 truncate font-inter text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
             {plan.members.map((m) => memberNames[m.userId] ?? m.name).join("  +  ")}
           </h1>
-          <p className="mt-1 text-xs text-muted">
+          <p className="mt-3 text-sm text-muted">
             {isEnded
               ? "Session ended"
-              : `Step ${Math.min(currentStep + 1, plan.steps.length)} of ${plan.steps.length}`}
-            {" · "}
-            <span className="font-mono">
+              : `Step ${stepProgress} of ${plan.steps.length}`}
+            <span className="mx-2 text-muted/50">·</span>
+            <span className="font-mono text-foreground/70">
               you are {memberNames[viewerUserId] ?? "?"}
             </span>
           </p>
@@ -224,6 +234,20 @@ export function SpaceRoom({
           </button>
         )}
       </header>
+
+      {/* Progress bar — compact horizontal bar that fills as steps clear.
+          Helps the pair see how much of the session is left without having
+          to count chips on the board. */}
+      {!isEnded && plan.steps.length > 0 && (
+        <div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200">
+            <div
+              className="h-full bg-foreground transition-all duration-500"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       <WeakAreasBoard
         cards={cards}
@@ -278,11 +302,11 @@ function SessionSummary({
   );
 
   return (
-    <section className="rounded-2xl border border-border bg-zinc-50 p-6">
-      <h2 className="font-display text-2xl text-foreground">
+    <section className="rounded-3xl border border-border bg-zinc-50/60 p-8">
+      <h2 className="font-inter text-3xl font-semibold tracking-tight text-foreground">
         Nice session, {memberNames[viewerUserId] ?? "there"}.
       </h2>
-      <p className="mt-1 text-sm text-muted">
+      <p className="mt-2 text-base text-muted">
         Here&apos;s what landed for you:
       </p>
 

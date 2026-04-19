@@ -80,7 +80,7 @@ export default async function ProfessorHome() {
           <p className="text-xs uppercase tracking-[0.18em] text-muted">
             Professor
           </p>
-          <h1 className="mt-2 font-display text-5xl font-medium tracking-tight text-foreground sm:text-6xl">
+          <h1 className="mt-2 font-inter text-5xl font-semibold tracking-tight text-foreground sm:text-6xl">
             Welcome back, {firstName}
           </h1>
           <p className="mt-4 max-w-xl text-lg text-muted">
@@ -97,7 +97,7 @@ export default async function ProfessorHome() {
 
         <section className="mt-16">
           <div className="flex items-end justify-between">
-            <h2 className="font-display text-2xl font-medium tracking-tight text-foreground">
+            <h2 className="font-inter text-2xl font-semibold tracking-tight text-foreground">
               Your courses
             </h2>
             {courseCount > 0 && (
@@ -139,7 +139,7 @@ export default async function ProfessorHome() {
         </section>
 
         <section className="mt-12">
-          <h2 className="font-display text-2xl font-medium tracking-tight text-foreground">
+          <h2 className="font-inter text-2xl font-semibold tracking-tight text-foreground">
             Create a new course
           </h2>
           <CreateCourseForm />

@@ -12,12 +12,9 @@ export function CreateCourseForm() {
   return (
     <form
       action={formAction}
-      className="mt-6 rounded-3xl border border-border bg-zinc-50/60 p-6"
+      className="mt-6 rounded-3xl border border-zinc-300 bg-zinc-200 p-6"
     >
-      <p className="text-sm text-muted">
-        Give it a code and a name. You can add lectures and publish it later.
-      </p>
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+      <div className="flex flex-col gap-3 sm:flex-row">
         <input
           name="code"
           type="text"

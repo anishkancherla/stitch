@@ -78,6 +78,56 @@ export function StepView({
 }
 
 // ---------------------------------------------------------------------------
+// Chip-style kicker
+//
+// Inspired by the "Ask X / Generate Y" chip row in the inspo screenshot —
+// a colored dot + label that reads at a glance as the *kind* of action
+// happening. Each step type gets its own color so you can scan the room
+// and immediately see "this is a teach step", "this is a quiz", etc.
+// ---------------------------------------------------------------------------
+
+type StepKind = "teach" | "llm_teach" | "quiz";
+
+const STEP_CHIP: Record<
+  StepKind,
+  { label: string; dot: string; bg: string; text: string; border: string }
+> = {
+  teach: {
+    label: "Teach step",
+    dot: "bg-emerald-500",
+    bg: "bg-emerald-50",
+    text: "text-emerald-800",
+    border: "border-emerald-200",
+  },
+  llm_teach: {
+    label: "Primer step",
+    dot: "bg-sky-500",
+    bg: "bg-sky-50",
+    text: "text-sky-800",
+    border: "border-sky-200",
+  },
+  quiz: {
+    label: "Quiz step",
+    dot: "bg-amber-500",
+    bg: "bg-amber-50",
+    text: "text-amber-800",
+    border: "border-amber-200",
+  },
+};
+
+function StepChip({ kind }: { kind: StepKind }) {
+  const c = STEP_CHIP[kind];
+  return (
+    <span
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${c.bg} ${c.text} ${c.border}`}
+    >
+      <span className={`inline-block h-1.5 w-1.5 rounded-full ${c.dot}`} />
+      {c.label}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Teach
 // ---------------------------------------------------------------------------
 
@@ -108,7 +158,7 @@ function TeachView({
 
   return (
     <StepFrame
-      kicker="Teach step"
+      kind="teach"
       title={`${teacherName} teaches ${learnerName}: ${step.subconceptLabel}`}
       sub={step.conceptLabel}
     >
@@ -170,7 +220,7 @@ function LlmTeachView({
 }) {
   return (
     <StepFrame
-      kicker="LLM-teach step"
+      kind="llm_teach"
       title={step.subconceptLabel}
       sub={`${step.conceptLabel} · primer for both of you`}
     >
@@ -245,7 +295,7 @@ function QuizView({
 
   return (
     <StepFrame
-      kicker="Quiz step"
+      kind="quiz"
       title={step.subconceptLabel}
       sub={`${step.conceptLabel} · pass to flip the card green`}
     >
@@ -328,26 +378,24 @@ function QuizView({
 // ---------------------------------------------------------------------------
 
 function StepFrame({
-  kicker,
+  kind,
   title,
   sub,
   children,
 }: {
-  kicker: string;
+  kind: StepKind;
   title: string;
   sub?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-border bg-background p-6">
-      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted">
-        {kicker}
-      </p>
-      <h2 className="mt-1 font-display text-2xl tracking-tight text-foreground">
+    <section className="rounded-3xl border border-border bg-background p-7">
+      <StepChip kind={kind} />
+      <h2 className="mt-4 font-inter text-3xl font-semibold tracking-tight text-foreground">
         {title}
       </h2>
-      {sub && <p className="mt-0.5 text-xs text-muted">{sub}</p>}
-      <div className="mt-5">{children}</div>
+      {sub && <p className="mt-2 text-sm text-muted">{sub}</p>}
+      <div className="mt-6">{children}</div>
     </section>
   );
 }

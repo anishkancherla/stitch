@@ -11,6 +11,8 @@ export function JoinCourseForm() {
 
   const formRef = useRef<HTMLFormElement>(null);
 
+  // Clear the input on a successful join so a second join doesn't carry
+  // the stale code into the input box.
   useEffect(() => {
     if (state && "ok" in state && state.ok) {
       formRef.current?.reset();
@@ -21,13 +23,12 @@ export function JoinCourseForm() {
     <form
       ref={formRef}
       action={formAction}
-      className="mt-3 rounded-2xl border border-border bg-zinc-50 p-5"
+      className="mt-6 rounded-3xl border border-zinc-300 bg-zinc-200 p-6"
     >
-      <p className="text-sm font-medium text-foreground">Join a course</p>
-      <p className="mt-0.5 text-xs text-muted">
-        Ask your professor for the 6-character code.
+      <p className="text-sm text-foreground/70">
+        Ask your professor for the 6-character join code.
       </p>
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
         <input
           name="code"
           type="text"
@@ -37,22 +38,22 @@ export function JoinCourseForm() {
           autoComplete="off"
           spellCheck={false}
           placeholder="K7B2QP"
-          className="h-11 flex-1 rounded-full border border-border bg-background px-4 font-mono text-sm uppercase tracking-widest outline-none focus:border-foreground focus:ring-2 focus:ring-foreground/10"
+          className="h-12 flex-1 rounded-xl border border-border bg-background px-4 font-mono text-base uppercase tracking-widest outline-none focus:border-foreground focus:ring-2 focus:ring-foreground/10"
           style={{ textTransform: "uppercase" }}
         />
         <button
           type="submit"
           disabled={pending}
-          className="h-11 rounded-xl bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="h-12 rounded-xl bg-foreground px-6 text-base font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {pending ? "Joining…" : "Join"}
         </button>
       </div>
       {state && "error" in state && (
-        <p className="mt-2 px-2 text-sm text-rose-600">{state.error}</p>
+        <p className="mt-3 px-2 text-sm text-rose-600">{state.error}</p>
       )}
       {state && "ok" in state && state.ok && (
-        <p className="mt-2 px-2 text-sm text-emerald-600">
+        <p className="mt-3 px-2 text-sm text-emerald-600">
           Joined. Your course appears above.
         </p>
       )}

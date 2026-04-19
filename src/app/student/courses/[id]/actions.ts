@@ -6,7 +6,9 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   rankMatches,
+  focusMastery,
   dbBlockToBlock,
+  STRONG_FOCUS_THRESHOLD,
   type AvailabilityBlock,
   type MatchResult,
 } from "@/lib/matching";
@@ -59,14 +61,25 @@ export async function bumpMastery(
 // ---------------------------------------------------------------------------
 
 export type GetMatchesResult =
-  | { ok: true; matches: MatchResult[] }
+  | {
+      ok: true;
+      matches: MatchResult[];
+      /** Requester's mastery on the focused cell (subconcept score, or
+       *  concept aggregate when no subconcept is selected). The UI uses
+       *  this to flip the panel into a "you're already strong" state
+       *  when matching wouldn't be useful. */
+      myFocusMastery: number;
+      /** Mirrors `myFocusMastery > STRONG_FOCUS_THRESHOLD`. Surfaced as
+       *  a flag so the UI doesn't have to know the threshold. */
+      alreadyStrong: boolean;
+    }
   | { ok: false; error: string };
 
 export async function getMatchesForConcept(
   courseId: string,
   conceptId: string,
   subconceptId: string | null = null,
-  limit: number = 5
+  limit: number = 3
 ): Promise<GetMatchesResult> {
   const supabase = await createClient();
   const {
@@ -102,7 +115,9 @@ export async function getMatchesForConcept(
     conceptId: s.concept_id as string,
   }));
   const subIds = subconcepts.map((s) => s.id);
-  if (subIds.length === 0) return { ok: true, matches: [] };
+  if (subIds.length === 0) {
+    return { ok: true, matches: [], myFocusMastery: 0, alreadyStrong: false };
+  }
 
   // All enrolled classmates (excluding the requester).
   const { data: enrollRows, error: eErr } = await admin
@@ -112,7 +127,9 @@ export async function getMatchesForConcept(
     .neq("user_id", user.id);
   if (eErr) return { ok: false, error: eErr.message };
   const classmateIds = (enrollRows ?? []).map((r) => r.user_id as string);
-  if (classmateIds.length === 0) return { ok: true, matches: [] };
+  if (classmateIds.length === 0) {
+    return { ok: true, matches: [], myFocusMastery: 0, alreadyStrong: false };
+  }
 
   // Pull mastery for everyone in one shot — requester + classmates, scoped
   // to this course's subconcepts.
@@ -149,6 +166,18 @@ export async function getMatchesForConcept(
     const score = row.score as number;
     if (uid === user.id) myMastery.set(sid, score);
     else classmatesMap.get(uid)?.set(sid, score);
+  }
+
+  // Compute the requester's mastery on the focused cell first. If they're
+  // already strong here, matching is the wrong tool — short-circuit before
+  // we burn cycles fetching availability + ranking. The UI uses the
+  // `alreadyStrong` flag to flip into a different empty state.
+  const conceptSubIds = subconcepts
+    .filter((s) => s.conceptId === conceptId)
+    .map((s) => s.id);
+  const myFocusMastery = focusMastery(myMastery, subconceptId, conceptSubIds);
+  if (myFocusMastery > STRONG_FOCUS_THRESHOLD) {
+    return { ok: true, matches: [], myFocusMastery, alreadyStrong: true };
   }
 
   // Availability for everyone (requester + classmates) in a single pass.
@@ -190,5 +219,5 @@ export async function getMatchesForConcept(
     limit,
   });
 
-  return { ok: true, matches };
+  return { ok: true, matches, myFocusMastery, alreadyStrong: false };
 }

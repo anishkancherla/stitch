@@ -87,6 +87,13 @@ export interface RankMatchesArgs {
 
 const DEFAULT_MASTERY = 0.5;
 
+/** A student "strong on" a focused cell doesn't benefit from being matched
+ *  with stronger peers — the whole point of stitching is finding teachers
+ *  for your *weak* areas. Anything above this threshold is treated as
+ *  already-mastered for matching purposes. Same number used in the UI to
+ *  flip the panel into a "you've got this" state. */
+export const STRONG_FOCUS_THRESHOLD = 0.7;
+
 // How heavily we weight the reciprocal half. The primary direction (they
 // teach me) wins, but having something to give back nudges them up.
 const RECIPROCAL_WEIGHT = 0.5;
@@ -209,7 +216,11 @@ export function rankMatches(args: RankMatchesArgs): MatchResult[] {
 // helpers
 // ---------------------------------------------------------------------------
 
-function focusMastery(
+/** Mastery on the focused cell — subconcept score if a subconcept is
+ *  selected, otherwise the average across every subconcept in the
+ *  concept. Exported so callers can branch on "is the requester strong
+ *  here?" before deciding whether matching even makes sense. */
+export function focusMastery(
   mastery: Map<string, number>,
   subconceptId: string | null,
   conceptSubIds: string[]
