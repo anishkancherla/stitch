@@ -101,16 +101,14 @@ export async function uploadLecture(
     };
   }
 
-  // Normalize + dedupe by lower-cased label so Gemini hiccups don't double up.
+  // The provider already hard-caps + dedupes; this is just a defensive
+  // belt-and-suspenders pass in case anything slipped through.
   const seen = new Set<string>();
   const subconcepts = (parsed.subconcepts ?? [])
-    .map((s) => ({
-      label: String(s.label ?? "").trim(),
-      description: s.description ? String(s.description).trim() : null,
-    }))
-    .filter((s) => {
-      if (s.label.length === 0) return false;
-      const key = s.label.toLowerCase();
+    .map((s) => String(s ?? "").trim())
+    .filter((label) => {
+      if (label.length === 0) return false;
+      const key = label.toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -120,9 +118,10 @@ export async function uploadLecture(
     return { ok: false, error: "Gemini didn't return any subconcepts." };
   }
 
-  // Default the lecture title to the parsed topic, then the file name (sans
-  // extension), then a fallback.
-  const fallbackTitle = parsed.topic?.trim() || stripExt(file.name) || concept.label;
+  // Default lecture title to the file name (sans extension), then the parent
+  // concept label as a last-ditch fallback. Subconcept extraction no longer
+  // returns a separate "topic" field.
+  const fallbackTitle = stripExt(file.name) || concept.label;
   const title = titleInput || fallbackTitle;
 
   // Insert lecture (new column).
@@ -143,11 +142,11 @@ export async function uploadLecture(
   }
 
   // Insert subconcepts (N new cells under (concept, lecture)).
-  const subRows = subconcepts.map((s) => ({
+  const subRows = subconcepts.map((label) => ({
     concept_id: conceptId,
     lecture_id: lecture.id,
-    label: s.label,
-    description: s.description,
+    label,
+    description: null,
   }));
   const { error: sErr } = await supabase.from("subconcepts").insert(subRows);
   if (sErr) {

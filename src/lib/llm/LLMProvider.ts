@@ -12,16 +12,12 @@ export interface SyllabusExtractionResult {
 }
 
 /**
- * One subconcept extracted from a single lecture. These become heatmap cells
- * under (parent concept × this lecture).
+ * Lecture-level subconcepts. Each string becomes a heatmap cell under
+ * (parent concept × this lecture). We don't carry a `topic` because the
+ * professor uploads under an already-chosen overarching concept.
  */
-export interface LectureSubconcept {
-  subconcept: string;
-}
-
 export interface LectureExtractionResult {
-  // we don't need topic because professor will upload under the overarching concept
-  subconcepts: LectureSubconcept[];
+  subconcepts: string[];
 }
 
 export abstract class LLMProvider {
@@ -44,71 +40,21 @@ Rules:
 - There should be exactly as many entries as there are weeks in the syllabus
 `;
 
-  protected readonly lecturePrompt: string = `
-You are analyzing a single university lecture (slides or notes). Extract the
-OVERARCHING subconcepts that students need to master after this lecture.
+protected readonly lecturePrompt: string = `
+Analyze this lecture and extract 3-5 overarching subconcepts students must master.
 
-# HARD CONSTRAINT
-Return AT MOST 5 subconcepts. Never more than 5. Target 3-5 entries.
-Returning 6 or more is a failure. Returning narrow / overlapping topics is a
-failure even if you stay under 5.
-
-# THINK BEFORE YOU ANSWER
-Before writing the JSON, internally do this:
-  1. List every topic you see in the lecture.
-  2. For each pair of topics, ask: "Are these two variations or instances of
-     the same broader idea?" If yes, MERGE them under the broader idea.
-  3. Repeat step 2 until no two remaining topics could be merged.
-  4. If you still have more than 5, keep merging the two most related ones.
-
-# GROUPING RULES (do not violate)
-A subconcept must be a TOP-LEVEL section heading you would put on a syllabus,
-NOT a slide title or sub-bullet. Variations, special cases, sub-techniques,
-and individual examples MUST live inside a broader umbrella label.
-
-Concrete merges that are MANDATORY when the corresponding pieces appear:
-  * Big-O, Omega (Ω), Theta (Θ), little-o, little-omega, "comparing functions
-    using limits", "common growth rates" -> ONE entry "Asymptotic Notation"
-  * "RAM model", "counting operations", "time complexity intro",
-    "asymptotic motivation", "practical analysis" -> ONE entry
-    "Algorithm Analysis Basics"
-  * Substitution method, recursion tree, Master Theorem -> ONE entry
-    "Recurrence Solving"
-  * Insertion sort, merge sort, quicksort, heapsort -> ONE entry
-    "Sorting Algorithms"
-  * BFS, DFS, Dijkstra, Bellman-Ford -> ONE entry "Graph Traversal" (or
-    "Shortest Paths" if that's the lecture's framing)
-
-# WHAT IS A FAILURE
-BAD output (too granular — these are all the same umbrella):
-  ["Big-O Notation", "Omega Notation", "Theta Notation",
-   "Little-o and Little-omega Notation", "Comparing Functions Using Limits",
-   "Common Growth Rate Classes", "Algebraic Rules for Asymptotic Notation"]
-GOOD output for the SAME lecture:
-  ["Algorithm Analysis Basics", "Asymptotic Notation",
-   "Comparing Growth Rates", "Common Complexity Classes"]
-
-# OUTPUT SCHEMA
-Return JSON matching this schema exactly, with no markdown wrappers:
+Return JSON with no markdown wrappers:
 {
-  "topic": "Short title for the whole lecture (optional).",
-  "subconcepts": [
-    { "label": "Asymptotic Notation", "description": "One sentence on what students should be able to do." }
-  ]
+  "subconcepts": ["...", "..."]
 }
 
-# OTHER RULES
-- Labels: 2-5 words, Title Case, noun phrases.
-- Description: one sentence on what the student should be able to do across
-  the entire umbrella (cover all merged sub-topics).
-- Exclude administrative content (logistics, syllabus recap, agenda, "next
-  week" preview, summary, Q&A, references).
-- Entries must be unique. Order them in the order they appear in the lecture.
-
-# FINAL CHECK (do this before returning)
-Count entries. If > 5, merge until <= 5.
-Re-read each label. If any two could plausibly live under one broader heading,
-merge them. Only then return.
+Rules:
+- HARD LIMIT: 3-5 entries. More than 5 is a failure.
+- Labels are syllabus-level headings (2-5 words, Title Case), not slide titles.
+- Merge related topics: Big-O/Omega/Theta/little-o/limit comparisons → "Asymptotic Notation". RAM model/operation counting/analysis motivation → "Algorithm Analysis Basics". Apply this logic to everything.
+- If you have > 5, keep merging the two most related entries until you don't.
+- Exclude logistics, policies, summaries, and Q&A slides.
+- Order by appearance in the document.
 `;
 
   constructor(name: string) {
@@ -143,21 +89,17 @@ merge them. Only then return.
     max = 5,
   ): LectureExtractionResult {
     const seen = new Set<string>();
-    const deduped: LectureSubconcept[] = [];
+    const deduped: string[] = [];
     for (const raw of result.subconcepts ?? []) {
-      const label = String(raw?.label ?? '').trim();
+      const label = String(raw ?? '').trim();
       if (!label) continue;
       const key = label.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      const description = raw?.description ? String(raw.description).trim() : undefined;
-      deduped.push(description ? { label, description } : { label });
+      deduped.push(label);
       if (deduped.length >= max) break;
     }
-    return {
-      topic: result.topic?.trim() || undefined,
-      subconcepts: deduped,
-    };
+    return { subconcepts: deduped };
   }
 
   /**
