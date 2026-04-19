@@ -10,6 +10,10 @@
 !.yarn/releases
 !.yarn/versions
 
+# local ribbon docs (not tracked)
+ribbon.md
+ribbonguide.md
+
 # testing
 /coverage
 

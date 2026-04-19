@@ -43,6 +43,48 @@ export function cellRingClass(value: number | null): string {
   return "ring-emerald-500";
 }
 
+// Continuous red→yellow→green hex on [0..1]. Lets the new ribbon paint
+// segments with inline backgroundColor (CSS classes can't hold the SVG
+// turbulence-friendly continuous gradient).
+export function cellHex(value: number | null): string {
+  if (value === null || Number.isNaN(value)) return "#e4e4e7"; // zinc-200
+  const v = Math.max(0, Math.min(1, value));
+  // Two-stop interpolation: 0 → rose, 0.5 → amber, 1 → emerald.
+  const stops: Array<[number, [number, number, number]]> = [
+    [0.0, [251, 113, 133]], // rose-400
+    [0.5, [252, 211, 77]], //  amber-300
+    [1.0, [52, 211, 153]], //  emerald-400
+  ];
+  let lo = stops[0];
+  let hi = stops[stops.length - 1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (v >= stops[i][0] && v <= stops[i + 1][0]) {
+      lo = stops[i];
+      hi = stops[i + 1];
+      break;
+    }
+  }
+  const span = hi[0] - lo[0] || 1;
+  const t = (v - lo[0]) / span;
+  const r = Math.round(lo[1][0] + (hi[1][0] - lo[1][0]) * t);
+  const g = Math.round(lo[1][1] + (hi[1][1] - lo[1][1]) * t);
+  const b = Math.round(lo[1][2] + (hi[1][2] - lo[1][2]) * t);
+  return `rgb(${r} ${g} ${b})`;
+}
+
+// Mean of defined cell values; null if the whole concept has no signal yet.
+export function conceptAggregate(group: RibbonGroup): number | null {
+  let sum = 0;
+  let n = 0;
+  for (const c of group.cells) {
+    if (c.value !== null && !Number.isNaN(c.value)) {
+      sum += c.value;
+      n += 1;
+    }
+  }
+  return n === 0 ? null : sum / n;
+}
+
 export const LEGEND_STEPS: Array<{ value: number | null; label: string }> = [
   { value: 0.2, label: "Weak" },
   { value: 0.55, label: "Mid" },
