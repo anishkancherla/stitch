@@ -80,10 +80,15 @@ export default async function CourseStudents({
     avg: number | null;
     weak: number;
   };
-  const students: StudentRow[] = ((enrollmentRows ?? []) as Array<{
-    user_id: string;
-    users: { id: string; name: string | null; email: string };
-  }>).map((row) => {
+  // Supabase's generated types model `users!inner(...)` as a join array, but
+  // at runtime an inner-join on a fk-to-one relationship returns a single
+  // object. Cast through unknown so the runtime shape lines up.
+  const students: StudentRow[] = (
+    (enrollmentRows ?? []) as unknown as Array<{
+      user_id: string;
+      users: { id: string; name: string | null; email: string };
+    }>
+  ).map((row) => {
     const a = aggByUser.get(row.user_id);
     return {
       id: row.user_id,

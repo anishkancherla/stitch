@@ -26,7 +26,7 @@ export default function Landing() {
 
         <Link
           href="/signup"
-          className="mt-8 rounded-xl bg-foreground px-6 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
+          className="mt-12 rounded-xl bg-foreground px-6 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
         >
           Get started
         </Link>

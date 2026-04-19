@@ -104,7 +104,7 @@ export function StitchCards() {
   }
 
   return (
-    <div className="relative mt-12 flex h-32 w-full items-center justify-center">
+    <div className="relative mt-6 flex h-28 w-full items-center justify-center">
       <Card
         dots={left}
         merged={merged}
