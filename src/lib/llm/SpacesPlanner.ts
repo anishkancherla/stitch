@@ -46,7 +46,11 @@ export class SpacesPlanner {
   private ai: GoogleGenAI;
   private model: string;
 
-  constructor(model = "gemini-2.5-flash") {
+  // Flash-lite for free-tier headroom — plain `gemini-2.5-flash` caps at
+  // 20 requests/day on the free tier, which gets eaten quickly between
+  // planner + chat + hint + feedback + weekly-quiz. Flash-lite handles
+  // the planner prompt fine and has a much larger daily allowance.
+  constructor(model = "gemini-2.5-flash-lite") {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY is not set. Add it to your .env file.");

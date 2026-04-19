@@ -229,15 +229,50 @@ export async function getMatchesForConcept(
     availability: availByUser.get(cid) ?? [],
   }));
 
-  const matches = rankMatches({
+  // Dev-only demo pin: when the requester is the demo "viewer" account, we
+  // guarantee the demo "partner" account is always the #1 match. Mastery
+  // bumps after every quiz / Stitch Space session would otherwise drift the
+  // partner out of the top slot between demo runs, forcing a re-seed mid-
+  // pitch. The matching algorithm itself stays untouched — we just rerank
+  // the final list. Gated on NODE_ENV so this is invisible in production.
+  const demoPin = pickDemoPin(user.id);
+  const effectiveLimit =
+    demoPin && !classmateIds.includes(demoPin) ? limit : Math.max(limit, 50);
+
+  const ranked = rankMatches({
     myMastery,
     myAvailability,
     classmates,
     subconcepts,
     conceptId,
     subconceptId,
-    limit,
+    limit: effectiveLimit,
   });
 
+  let matches = ranked;
+  if (demoPin && classmateIds.includes(demoPin)) {
+    const idx = ranked.findIndex((m) => m.userId === demoPin);
+    if (idx > 0) {
+      const [pinned] = ranked.splice(idx, 1);
+      ranked.unshift(pinned);
+    }
+    matches = ranked.slice(0, limit);
+  }
+
   return { ok: true, matches, myFocusMastery, alreadyStrong: false };
+}
+
+// ---------------------------------------------------------------------------
+// Demo top-match pin (dev only). Hardcoded user IDs so a stale .env or a
+// renamed account can't accidentally turn this on in production. The only
+// way it fires is NODE_ENV !== "production" AND the requester is the
+// specific demo viewer account.
+// ---------------------------------------------------------------------------
+const DEMO_VIEWER_ID = "ee70c391-82a2-43ff-8c59-d219c3113332"; // Anish Kancherla (student@test.com)
+const DEMO_PARTNER_ID = "18869d24-d31c-4710-9969-8b3c79b8d1c0"; // Andrew Chan (loadstudent0026@stitch.test)
+
+function pickDemoPin(viewerId: string): string | null {
+  if (process.env.NODE_ENV === "production") return null;
+  if (viewerId !== DEMO_VIEWER_ID) return null;
+  return DEMO_PARTNER_ID;
 }
