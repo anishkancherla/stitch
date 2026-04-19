@@ -9,6 +9,7 @@ import { DeleteButton } from "./DeleteButton";
 import { RealtimeRibbonRefresher } from "@/components/RealtimeRibbonRefresher";
 import { UploadSyllabusForm } from "./UploadSyllabusForm";
 import { UploadLectureForm } from "./UploadLectureForm";
+import { CourseTabs } from "./CourseTabs";
 import { buildGroups } from "@/lib/ribbon";
 
 type Params = { id: string };
@@ -190,7 +191,9 @@ export default async function CourseDetail({
           {enrolledCount === 1 ? "student enrolled" : "students enrolled"}
         </p>
 
-        <section className="mt-12">
+        <CourseTabs courseId={course.id} active="overview" />
+
+        <section className="mt-8">
           <div className="flex items-baseline justify-between gap-4">
             <h2 className="text-base font-medium text-foreground">
               Class ribbon
